@@ -87,8 +87,13 @@ class TestThreatLensAPI(unittest.TestCase):
 
     def tearDown(self):
         self.conn.close()
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
+        import gc
+        gc.collect()
+        try:
+            if os.path.exists(self.db_path):
+                os.remove(self.db_path)
+        except OSError:
+            pass
 
     # ----------------------------------------------------------------------
     # Logs endpoint

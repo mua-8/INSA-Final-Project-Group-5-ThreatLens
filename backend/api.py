@@ -29,13 +29,10 @@ from __future__ import annotations
 
 import json
 import os
-import traceback
-from pathlib import Path
-
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 
 from backend import repository as repo
-from backend.database import init_db, sha256_of
+from backend.database import init_db, sha256_of, get_connection
 
 # --------------------------------------------------------------------------
 # Application setup
@@ -46,10 +43,38 @@ app = Flask(__name__)
 DB_PATH = os.environ.get("THREATLENS_DB", "threatlens.db")
 
 
+@app.route("/", methods=["GET"])
+def index():
+    """API Root - Pure JSON status and endpoint discovery."""
+    return jsonify({
+        "ok": True,
+        "service": "ThreatLens REST API",
+        "module": "Module B (Backend API and Database)",
+        "endpoints": {
+            "ingest": "POST /api/ingest",
+            "logs": "GET /api/logs",
+            "events": "GET /api/events",
+            "alerts": "GET /api/alerts",
+            "statistics": "GET /api/statistics",
+            "incidents": "GET /api/incidents"
+        }
+    })
+
+
 def get_db():
     """Return a database connection for this request."""
-    from backend.database import get_connection
-    return get_connection(DB_PATH)
+    if "db" not in g:
+        g.db = get_connection(DB_PATH)
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(exception=None):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
+
 
 
 # --------------------------------------------------------------------------
