@@ -1,0 +1,2 @@
+# ThreatLens - Backend & Detection Dependencies
+Flask>=3.0.0

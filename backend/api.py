@@ -29,7 +29,11 @@ from __future__ import annotations
 
 import json
 import os
+import traceback
+from pathlib import Path
+
 from flask import Flask, jsonify, request, g
+
 
 from backend import repository as repo
 from backend.database import init_db, sha256_of, get_connection
@@ -62,10 +66,11 @@ def index():
 
 
 def get_db():
-    """Return a database connection for this request."""
+    """Return a database connection for this request, ensuring schema exists."""
     if "db" not in g:
-        g.db = get_connection(DB_PATH)
+        g.db = init_db(DB_PATH)
     return g.db
+
 
 
 @app.teardown_appcontext
@@ -76,10 +81,30 @@ def close_db(exception=None):
 
 
 
+@app.after_request
+def add_cors_headers(response):
+    """Enable Cross-Origin Resource Sharing (CORS) for SOC frontends."""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Filename"
+    return response
 
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    """Production health check endpoint."""
+    conn = get_db()
+    try:
+        conn.execute("SELECT 1").fetchone()
+        db_status = "connected"
+    except Exception as exc:
+        db_status = f"error: {exc}"
+    return jsonify({
+        "status": "healthy",
+        "database": db_status,
+        "service": "ThreatLens API"
+    })
+
 
 def _row(r) -> dict:
     """Convert a sqlite3.Row (or None) to a plain dict."""
@@ -126,14 +151,16 @@ def ingest():
             f = request.files["file"]
             filename = f.filename or "upload.log"
             raw = f.read()
-        elif request.data:
-            filename = request.headers.get("X-Filename", "upload.log")
-            raw = request.data
         else:
-            return _err("No file provided. Send multipart 'file' or raw bytes.")
+            raw = request.get_data(parse_form_data=False)
+            if not raw and request.form:
+                raw = "\n".join(request.form.keys()).encode("utf-8")
+            filename = request.headers.get("X-Filename", "upload.log")
 
         if not raw:
-            return _err("Uploaded file is empty.")
+            return _err("No file provided. Send multipart 'file' or raw bytes.")
+
+
 
         year = request.args.get("year", None)
         if year is not None:
@@ -497,5 +524,16 @@ def list_incident_notes(incident_id: int):
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+    cli_parser = argparse.ArgumentParser(description="ThreatLens SOC Backend API Server")
+    cli_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
+    cli_parser.add_argument("--port", type=int, default=5000, help="Port to listen on (default: 5000)")
+    cli_parser.add_argument("--db", default=DB_PATH, help=f"Path to SQLite database file (default: {DB_PATH})")
+    args = cli_parser.parse_args()
+
+    DB_PATH = args.db
     init_db(DB_PATH)
-    app.run(debug=True, port=5000)
+    print(f"[*] ThreatLens Backend API starting on http://{args.host}:{args.port}")
+    print(f"[*] Connected to database: {DB_PATH}")
+    app.run(host=args.host, port=args.port, debug=False)
+
