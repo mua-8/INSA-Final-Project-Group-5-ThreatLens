@@ -1,5 +1,5 @@
 import React from "react";
-import { FaShieldAlt, FaSyncAlt, FaDatabase, FaBolt } from "react-icons/fa";
+import { FaShieldAlt, FaSyncAlt, FaDatabase, FaBolt, FaVial } from "react-icons/fa";
 
 export default function Header({
   lastUpdated,
@@ -8,6 +8,7 @@ export default function Header({
   offline,
   onOpenIngest,
   onOpenDbHealth,
+  onOpenTesterCenter,
 }) {
   return (
     <header className="sticky top-0 z-20 border-b border-slate-700/60 bg-primary/95 backdrop-blur-md">
@@ -36,6 +37,16 @@ export default function Header({
         {/* Action Controls & Telemetry */}
         <div className="flex flex-wrap items-center gap-3 text-sm">
           
+          {/* Module B Verification & Tester Center Button */}
+          <button
+            onClick={onOpenTesterCenter}
+            title="Open Interactive Test Suite, SQLi Fuzzer, and API Explorer"
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 active:scale-95"
+          >
+            <FaVial size={12} className="text-purple-200" />
+            <span>Tester Center (81 Tests & SQLi)</span>
+          </button>
+
           {/* Ingest / Simulate Attack Button */}
           <button
             onClick={onOpenIngest}

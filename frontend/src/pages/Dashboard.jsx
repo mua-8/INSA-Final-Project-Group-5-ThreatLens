@@ -9,6 +9,7 @@ import AlertDetailModal from "../components/AlertDetailModal.jsx";
 import EventDetailModal from "../components/EventDetailModal.jsx";
 import IngestModal from "../components/IngestModal.jsx";
 import DatabaseHealthModal from "../components/DatabaseHealthModal.jsx";
+import TesterCenterModal from "../components/TesterCenterModal.jsx";
 import useDashboardData from "../hooks/useDashboardData.js";
 
 function LoadingState() {
@@ -56,6 +57,7 @@ export default function Dashboard() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [showIngestModal, setShowIngestModal] = useState(false);
   const [showDbHealthModal, setShowDbHealthModal] = useState(false);
+  const [showTesterCenter, setShowTesterCenter] = useState(false);
 
   return (
     <div className="min-h-screen bg-primary pb-16">
@@ -66,6 +68,7 @@ export default function Dashboard() {
         offline={!!error}
         onOpenIngest={() => setShowIngestModal(true)}
         onOpenDbHealth={() => setShowDbHealthModal(true)}
+        onOpenTesterCenter={() => setShowTesterCenter(true)}
       />
 
       <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
@@ -139,6 +142,13 @@ export default function Dashboard() {
       {showDbHealthModal && (
         <DatabaseHealthModal
           onClose={() => setShowDbHealthModal(false)}
+        />
+      )}
+
+      {showTesterCenter && (
+        <TesterCenterModal
+          onClose={() => setShowTesterCenter(false)}
+          onRefreshDashboard={retry}
         />
       )}
     </div>

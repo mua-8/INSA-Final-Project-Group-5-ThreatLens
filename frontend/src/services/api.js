@@ -4,7 +4,7 @@ const BASE_URL = "http://127.0.0.1:5000";
 
 const client = axios.create({
   baseURL: BASE_URL,
-  timeout: 10000,
+  timeout: 30000,
   headers: { Accept: "application/json" },
 });
 
@@ -49,7 +49,6 @@ export const ingestLog = async (logData, filename = "upload.log") => {
     });
     return res.data;
   }
-  // Programmatic raw string upload with custom X-Filename
   const res = await client.post("/api/ingest", logData, {
     headers: {
       "Content-Type": "text/plain",
@@ -74,7 +73,7 @@ export const updateIncidentStatus = async (id, status) => {
   return res.data;
 };
 
-export const addIncidentNote = async (id, note, author = "Adnan (Analyst)") => {
+export const addIncidentNote = async (id, note, author = "Adnan (Lead Analyst)") => {
   const res = await client.post(`/api/incidents/${id}/notes`, { note, author });
   return res.data;
 };
@@ -82,4 +81,35 @@ export const addIncidentNote = async (id, note, author = "Adnan (Analyst)") => {
 export const getIncidentNotes = async (id) => {
   const res = await client.get(`/api/incidents/${id}/notes`);
   return res.data;
+};
+
+// Module B Interactive Verification Endpoints
+export const runSystemTests = async () => {
+  const res = await client.post("/api/system/tests/run");
+  return res.data;
+};
+
+export const runSqliFuzz = async (payload, target = "source_ip") => {
+  const res = await client.post("/api/system/sqli-fuzz", { payload, target });
+  return res.data;
+};
+
+export const callRawEndpoint = async (method, path, body = null) => {
+  const start = performance.now();
+  let res;
+  if (method === "GET") {
+    res = await client.get(path);
+  } else if (method === "POST") {
+    res = await client.post(path, body);
+  } else if (method === "PATCH") {
+    res = await client.patch(path, body);
+  } else {
+    res = await client.request({ method, url: path, data: body });
+  }
+  const duration = Math.round(performance.now() - start);
+  return {
+    status: res.status,
+    durationMs: duration,
+    data: res.data,
+  };
 };
