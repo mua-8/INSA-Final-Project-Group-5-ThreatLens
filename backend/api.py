@@ -334,7 +334,13 @@ def list_events():
         limit=limit,
         offset=offset,
     )
-    return _ok({"events": _rows(events), "count": len(events)})
+    rows = _rows(events)
+    return jsonify({
+        "ok": True,
+        "events": rows,
+        "count": len(rows),
+        "data": {"events": rows, "count": len(rows)},
+    })
 
 
 @app.route("/api/events/<int:event_id>", methods=["GET"])
@@ -368,7 +374,13 @@ def list_alerts():
         limit=limit,
         offset=offset,
     )
-    return _ok({"alerts": _rows(alerts), "count": len(alerts)})
+    rows = _rows(alerts)
+    return jsonify({
+        "ok": True,
+        "alerts": rows,
+        "count": len(rows),
+        "data": {"alerts": rows, "count": len(rows)},
+    })
 
 
 @app.route("/api/alerts/<int:alert_id>", methods=["GET"])
@@ -410,10 +422,34 @@ def update_alert_status(alert_id: int):
 def statistics():
     conn = get_db()
     stats = repo.auth_statistics(conn)
-    stats["alert_counts_by_severity"] = repo.count_alerts_by_severity(conn)
-    stats["top_source_ips"] = _rows(repo.top_source_ips(conn, limit=10))
-    stats["total_alerts"] = sum(repo.count_alerts_by_severity(conn).values())
-    return _ok(stats)
+    alert_sev = repo.count_alerts_by_severity(conn)
+    top_ips = _rows(repo.top_source_ips(conn, limit=10))
+    total_alerts = sum(alert_sev.values())
+    high_sev = alert_sev.get("high", 0) + alert_sev.get("critical", 0)
+
+    payload = {
+        "total": stats.get("total", 0),
+        "total_events": stats.get("total", 0),
+        "event_count": stats.get("total", 0),
+        "accepted": stats.get("accepted", 0),
+        "failed": stats.get("failed", 0),
+        "unique_ips": stats.get("unique_ips", 0),
+        "unique_source_ips": stats.get("unique_ips", 0),
+        "unique_users": stats.get("unique_users", 0),
+        "total_alerts": total_alerts,
+        "high_severity": high_sev,
+        "high_severity_alerts": high_sev,
+        "alert_counts_by_severity": alert_sev,
+        "alerts_by_severity": alert_sev,
+        "severity_distribution": alert_sev,
+        "top_source_ips": top_ips,
+        "top_ips": top_ips,
+    }
+    res = dict(payload)
+    res["ok"] = True
+    res["data"] = payload
+    return jsonify(res)
+
 
 
 # --------------------------------------------------------------------------
