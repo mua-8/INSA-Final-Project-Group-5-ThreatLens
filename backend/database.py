@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS incidents (
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS incident_alerts (
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    alert_id    INTEGER NOT NULL REFERENCES alerts(id)    ON DELETE CASCADE,
+    linked_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (incident_id, alert_id)
+);
+
 CREATE TABLE IF NOT EXISTS incident_alert (
     incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     alert_id    INTEGER NOT NULL REFERENCES alerts(id)    ON DELETE CASCADE,
@@ -114,12 +121,14 @@ CREATE TABLE IF NOT EXISTS incident_notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     author      TEXT    NOT NULL DEFAULT 'analyst',
-    note        TEXT    NOT NULL,
+    body        TEXT    NOT NULL DEFAULT '',
+    note        TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_incident_notes_incident ON incident_notes(incident_id);
 """
+
 
 
 # --------------------------------------------------------------------------

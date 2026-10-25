@@ -307,6 +307,10 @@ def update_incident_status(conn: sqlite3.Connection, incident_id: int,
 def link_alert_to_incident(conn: sqlite3.Connection, incident_id: int,
                              alert_id: int) -> None:
     conn.execute(
+        "INSERT OR IGNORE INTO incident_alerts (incident_id, alert_id) VALUES (?, ?)",
+        (incident_id, alert_id),
+    )
+    conn.execute(
         "INSERT OR IGNORE INTO incident_alert (incident_id, alert_id) VALUES (?, ?)",
         (incident_id, alert_id),
     )
@@ -332,8 +336,8 @@ def insert_incident_note(conn: sqlite3.Connection, incident_id: int,
     if not note:
         raise ValueError("note must not be empty")
     cur = conn.execute(
-        "INSERT INTO incident_notes (incident_id, author, note) VALUES (?, ?, ?)",
-        (incident_id, author.strip() or "analyst", note),
+        "INSERT INTO incident_notes (incident_id, author, body, note) VALUES (?, ?, ?, ?)",
+        (incident_id, author.strip() or "analyst", note, note),
     )
     # bump incident updated_at
     conn.execute(
@@ -341,6 +345,7 @@ def insert_incident_note(conn: sqlite3.Connection, incident_id: int,
         (incident_id,),
     )
     return cur.lastrowid
+
 
 
 def list_incident_notes(conn: sqlite3.Connection,

@@ -374,6 +374,7 @@ def get_alert(alert_id: int):
     return _ok(data)
 
 
+@app.route("/api/alerts/<int:alert_id>", methods=["PATCH"])
 @app.route("/api/alerts/<int:alert_id>/status", methods=["PATCH"])
 def update_alert_status(alert_id: int):
     body = request.get_json(silent=True) or {}
@@ -392,9 +393,10 @@ def update_alert_status(alert_id: int):
 
 
 # --------------------------------------------------------------------------
-# Statistics
+# Statistics (RSD: GET /api/stats)
 # --------------------------------------------------------------------------
 
+@app.route("/api/stats", methods=["GET"])
 @app.route("/api/statistics", methods=["GET"])
 def statistics():
     conn = get_db()
@@ -425,6 +427,7 @@ def list_incidents():
 
 @app.route("/api/incidents", methods=["POST"])
 def create_incident():
+    """Create an incident from selected alerts (RSD Section 10)."""
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()
     if not title:
@@ -438,10 +441,17 @@ def create_incident():
     conn = get_db()
     try:
         incident_id = repo.insert_incident(conn, title, description, severity)
+        # Link selected alerts if provided
+        alert_ids = body.get("alert_ids") or []
+        if isinstance(alert_ids, list):
+            for aid in alert_ids:
+                if isinstance(aid, int):
+                    repo.link_alert_to_incident(conn, incident_id, aid)
     except ValueError as exc:
         return _err(str(exc))
     conn.commit()
     return _ok({"incident_id": incident_id}, 201)
+
 
 
 @app.route("/api/incidents/<int:incident_id>", methods=["GET"])
@@ -492,12 +502,13 @@ def link_alert_to_incident(incident_id: int):
 @app.route("/api/incidents/<int:incident_id>/notes", methods=["POST"])
 def add_incident_note(incident_id: int):
     body = request.get_json(silent=True) or {}
-    note = (body.get("note") or "").strip()
+    note = (body.get("note") or body.get("body") or "").strip()
     if not note:
-        return _err("'note' is required.")
+        return _err("'note' (or 'body') is required.")
     if len(note) > 5000:
         return _err("Note must be 5000 characters or fewer.")
     author = (body.get("author") or "analyst").strip()
+
 
     conn = get_db()
     if repo.get_incident(conn, incident_id) is None:
