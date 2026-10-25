@@ -1,4 +1,4 @@
-export default function DataTable({ title, count, columns, rows, emptyText }) {
+export default function DataTable({ title, count, columns, rows, emptyText, onRowClick }) {
   return (
     <section className="rounded-xl border border-slate-700/60 bg-card shadow-lg shadow-black/20">
       <div className="flex items-center justify-between border-b border-slate-700/60 px-5 py-4">
@@ -21,7 +21,11 @@ export default function DataTable({ title, count, columns, rows, emptyText }) {
               </tr>
             ) : (
               rows.map((row, i) => (
-                <tr key={i} className="transition hover:bg-slate-700/30">
+                <tr
+                  key={i}
+                  onClick={() => onRowClick && onRowClick(row)}
+                  className={`transition ${onRowClick ? "cursor-pointer hover:bg-slate-700/50 hover:border-l-4 hover:border-l-accent" : "hover:bg-slate-700/30"}`}
+                >
                   {columns.map((c) => (
                     <td key={c.key} className="whitespace-nowrap px-5 py-3 text-slate-200">{c.render(row)}</td>
                   ))}
@@ -34,3 +38,4 @@ export default function DataTable({ title, count, columns, rows, emptyText }) {
     </section>
   );
 }
+

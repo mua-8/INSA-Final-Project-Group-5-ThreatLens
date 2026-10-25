@@ -1,9 +1,14 @@
+import React, { useState } from "react";
 import { FaListUl, FaBell, FaExclamationTriangle, FaNetworkWired, FaPlug, FaRedo } from "react-icons/fa";
 import Header from "../components/Header.jsx";
 import StatCard, { StatCardSkeleton } from "../components/StatCard.jsx";
 import Charts, { ChartSkeleton } from "../components/Charts.jsx";
 import AlertsTable from "../components/AlertsTable.jsx";
 import EventsTable from "../components/EventsTable.jsx";
+import AlertDetailModal from "../components/AlertDetailModal.jsx";
+import EventDetailModal from "../components/EventDetailModal.jsx";
+import IngestModal from "../components/IngestModal.jsx";
+import DatabaseHealthModal from "../components/DatabaseHealthModal.jsx";
 import useDashboardData from "../hooks/useDashboardData.js";
 
 function LoadingState() {
@@ -45,10 +50,23 @@ function ErrorState({ message, onRetry, retrying }) {
 
 export default function Dashboard() {
   const { data, loading, refreshing, error, lastUpdated, retry } = useDashboardData();
+  
+  // Interactive modal states
+  const [selectedAlert, setSelectedAlert] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [showIngestModal, setShowIngestModal] = useState(false);
+  const [showDbHealthModal, setShowDbHealthModal] = useState(false);
 
   return (
-    <div className="min-h-screen">
-      <Header lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={retry} offline={!!error} />
+    <div className="min-h-screen bg-primary pb-16">
+      <Header
+        lastUpdated={lastUpdated}
+        refreshing={refreshing}
+        onRefresh={retry}
+        offline={!!error}
+        onOpenIngest={() => setShowIngestModal(true)}
+        onOpenDbHealth={() => setShowDbHealthModal(true)}
+      />
 
       <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
         {loading && !data && <LoadingState />}
@@ -64,6 +82,7 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* Stat Cards */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard label="Total Events" value={data.summary.totalEvents} icon={FaListUl} tone="accent" />
               <StatCard label="Total Alerts" value={data.summary.totalAlerts} icon={FaBell} tone="warning" />
@@ -71,6 +90,7 @@ export default function Dashboard() {
               <StatCard label="Unique Source IPs" value={data.summary.uniqueIps} icon={FaNetworkWired} tone="success" />
             </div>
 
+            {/* Analytics & Distribution Charts */}
             <Charts
               severity={data.severity}
               eventsTimeline={data.eventsTimeline}
@@ -78,11 +98,49 @@ export default function Dashboard() {
               topIps={data.topIps}
             />
 
-            <AlertsTable alerts={data.alerts} />
-            <EventsTable events={data.events} />
+            {/* Ingested Alerts Table with Click Triage */}
+            <AlertsTable
+              alerts={data.alerts}
+              onSelectAlert={(alert) => setSelectedAlert(alert)}
+            />
+
+            {/* Ingested Events Table with Click Raw Syslog Inspection */}
+            <EventsTable
+              events={data.events}
+              onSelectEvent={(event) => setSelectedEvent(event)}
+            />
           </>
         )}
       </main>
+
+      {/* Interactive Modals */}
+      {selectedAlert && (
+        <AlertDetailModal
+          alert={selectedAlert}
+          onClose={() => setSelectedAlert(null)}
+          onRefresh={retry}
+        />
+      )}
+
+      {selectedEvent && (
+        <EventDetailModal
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+        />
+      )}
+
+      {showIngestModal && (
+        <IngestModal
+          onClose={() => setShowIngestModal(false)}
+          onRefresh={retry}
+        />
+      )}
+
+      {showDbHealthModal && (
+        <DatabaseHealthModal
+          onClose={() => setShowDbHealthModal(false)}
+        />
+      )}
     </div>
   );
 }

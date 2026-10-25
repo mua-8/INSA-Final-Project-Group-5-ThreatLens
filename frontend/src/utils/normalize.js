@@ -24,20 +24,32 @@ const capitalize = (s) => {
 };
 
 export const normalizeAlert = (a = {}) => ({
-  timestamp: pick(a, ["timestamp", "time", "created_at", "detected_at", "datetime"], ""),
-  type: pick(a, ["alert_type", "type", "rule", "rule_name", "name", "message"], "Unknown"),
+  id: a.id,
+  ruleId: a.rule_id || a.ruleId || "",
+  timestamp: pick(a, ["first_seen", "timestamp", "time", "created_at", "detected_at", "datetime"], ""),
+  type: pick(a, ["rule_name", "alert_type", "type", "rule", "name", "message"], "Security Alert"),
   severity: capitalize(pick(a, ["severity", "level", "priority"], "low")),
   sourceIp: pick(a, ["source_ip", "src_ip", "ip", "ip_address", "attacker_ip"], "-"),
-  status: pick(a, ["status", "state"], "Open"),
+  status: capitalize(pick(a, ["status", "state"], "new")),
+  summary: a.summary || "",
+  explanation: a.explanation || "",
+  firstSeen: a.first_seen || "",
+  lastSeen: a.last_seen || "",
 });
 
 export const normalizeEvent = (e = {}) => ({
+  id: e.id,
   timestamp: pick(e, ["timestamp", "time", "created_at", "datetime"], ""),
   username: pick(e, ["username", "user", "account"], "-"),
   eventType: pick(e, ["event_type", "type", "event", "action"], "Unknown"),
   sourceIp: pick(e, ["source_ip", "src_ip", "ip", "ip_address"], "-"),
-  status: pick(e, ["status", "result", "outcome"], "-"),
+  status: pick(e, ["outcome", "status", "result"], "-"),
+  rawLine: e.raw_line || "",
+  method: e.method || "",
+  port: e.port || "",
+  host: e.host || "web01",
 });
+
 
 export const toTime = (ts) => {
   const t = new Date(ts).getTime();
