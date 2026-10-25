@@ -36,7 +36,14 @@ from flask import Flask, jsonify, request, g
 
 
 from backend import repository as repo
-from backend.database import init_db, sha256_of, get_connection
+from backend.database import (
+    check_database_integrity,
+    get_connection,
+    get_database_metrics,
+    init_db,
+    sha256_of,
+)
+
 
 # --------------------------------------------------------------------------
 # Application setup
@@ -92,18 +99,23 @@ def add_cors_headers(response):
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Production health check endpoint."""
+    """Production health check & database telemetry endpoint."""
     conn = get_db()
-    try:
-        conn.execute("SELECT 1").fetchone()
-        db_status = "connected"
-    except Exception as exc:
-        db_status = f"error: {exc}"
+    integrity = check_database_integrity(conn)
+    metrics = get_database_metrics(conn)
     return jsonify({
-        "status": "healthy",
-        "database": db_status,
-        "service": "ThreatLens API"
+        "status": "healthy" if integrity["is_healthy"] else "degraded",
+        "service": "ThreatLens SOC Backend API",
+        "database": {
+            "status": "connected",
+            "integrity": integrity["integrity"],
+            "foreign_key_violations": integrity["foreign_key_violations"],
+            "size_bytes": metrics["database_size_bytes"],
+            "journal_mode": metrics["journal_mode"],
+            "table_records": metrics["table_counts"]
+        }
     })
+
 
 
 def _row(r) -> dict:
@@ -180,16 +192,13 @@ def ingest():
                 "log_file": _row(existing),
             })
 
-        # ---- parse ---------------------------------------------------------
-        try:
-            from backend.parser import parse_text
-        except ImportError:
-            return _err("Parser module (Module A) not yet available.", 503)
-
+        # ---- parse (uses Module A adapter with fallback) ------------------
+        from backend.adapter import parse_and_adapt
         text = raw.decode("utf-8", errors="replace")
         from datetime import datetime as _dt
         effective_year = year or _dt.now().year
-        parsed = parse_text(text, effective_year)
+        parsed = parse_and_adapt(text, effective_year)
+
 
         # ---- store log file ------------------------------------------------
         log_file_id = repo.insert_log_file(
