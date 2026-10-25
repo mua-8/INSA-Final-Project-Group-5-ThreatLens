@@ -5,17 +5,23 @@ __pycache__/
 *.so
 .Python
 
-# Virtual Environment
+# Virtual environments and environment variables
 .venv/
 venv/
 ENV/
+.env
 
-# Testing & Coverage
+# Testing and coverage
 .pytest_cache/
 .coverage
 htmlcov/
 
-# IDE & OS
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
+# IDE and operating system
 .vscode/
 .idea/
 .DS_Store
