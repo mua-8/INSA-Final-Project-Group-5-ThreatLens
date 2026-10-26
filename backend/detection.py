@@ -199,7 +199,7 @@ def _fmt(ts: datetime) -> str:
 class Alert:
     rule_id: str
     rule_name: str
-    source_ip: str
+    source_ip: Optional[str]
     settings: dict
     events: dict = field(default_factory=dict, repr=False)   # ref -> Event (the evidence)
     id: Optional[int] = None
@@ -245,7 +245,7 @@ class Alert:
         }
 
 
-def _new_alert(rule_id: str, ip: str, events: Iterable, settings: dict) -> Alert:
+def _new_alert(rule_id: str, ip: Optional[str], events: Iterable, settings: dict) -> Alert:
     alert = Alert(rule_id=rule_id, rule_name=RULE_NAMES[rule_id], source_ip=ip,
                   settings=dict(settings),
                   events={event_ref(e): e for e in events})
@@ -314,10 +314,11 @@ def _describe_dr05(a: Alert):
     accepted = [e for e in a.events.values() if e.outcome == "success"]
     failed = len(a.events) - len(accepted)
     severity = s["accepted_severity"] if accepted else s["severity"]
-    summary = (f"{len(a.events)} root login attempts from {a.source_ip} "
+    location = f" from {a.source_ip}" if a.source_ip else ""
+    summary = (f"{len(a.events)} root login attempts{location} "
                f"({len(accepted)} accepted, {failed} failed)")
     explanation = (f"Root login attempt (DR-05): login attempts as a privileged account "
-                   f"({_names(s['usernames'])}) from {a.source_ip}. Any attempt raises "
+                   f"({_names(s['usernames'])}){location}. Any attempt raises "
                    f"'{s['severity']}'; an accepted login raises '{s['accepted_severity']}'.")
     return severity, summary, explanation
 
@@ -486,7 +487,7 @@ class DetectionEngine:
     def __init__(self, config: Optional[DetectionConfig] = None):
         self.config = config or DetectionConfig.default()
         self.alerts: List[Alert] = []
-        self._history: Dict[str, dict] = {}     # source_ip -> {ref: event}
+        self._history: Dict[Optional[str], dict] = {}     # source_ip -> {line_hash: event}
         self._next_id = 1
 
     def process(self, new_events: Iterable) -> DetectionResult:
@@ -495,19 +496,22 @@ class DetectionEngine:
         affected = set()
 
         for event in new_events:
-            ref = event_ref(event)
             bucket = self._history.setdefault(event.source_ip, {})
-            if ref in bucket:
+            # Deduplicate by line_hash or matching event id
+            if event.line_hash in bucket or (event.id is not None and any(e.id == event.id for e in bucket.values())):
                 result.duplicate_events += 1     # same line uploaded again
                 continue
-            bucket[ref] = event
+            bucket[event.line_hash] = event
             affected.add(event.source_ip)
             result.events_processed += 1
 
         candidates: List[Alert] = []
-        for ip in sorted(affected):
+        for ip in sorted(affected, key=lambda x: (x is None, x or "")):
             events = sorted(self._history[ip].values(), key=lambda e: e.timestamp)
             for rule_id, detector in DETECTORS.items():
+                if ip is None and rule_id != "DR-05":
+                    # Rules DR-01 through DR-04 require a valid source IP for correlation
+                    continue
                 settings = self.config.rules[rule_id]
                 if settings["enabled"]:
                     candidates.extend(detector(ip, events, settings, self.config.dedupe_gap))

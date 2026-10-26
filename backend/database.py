@@ -129,6 +129,29 @@ CREATE TABLE IF NOT EXISTS incident_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_incident_notes_incident ON incident_notes(incident_id);
+
+CREATE TABLE IF NOT EXISTS endpoint_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id        TEXT    NOT NULL UNIQUE,        -- UUIDv4 string from agent
+    device_id       TEXT    NOT NULL,
+    timestamp       TEXT    NOT NULL,               -- ISO-8601 UTC
+    source          TEXT    NOT NULL,               -- e.g. 'linux_auth', 'windows_event', 'sysmon'
+    event_type      TEXT    NOT NULL,
+    severity        TEXT    NOT NULL CHECK(severity IN ('informational','low','medium','high','critical')),
+    schema_version  TEXT    NOT NULL DEFAULT '1.0.0',
+    source_ip       TEXT,
+    username        TEXT,
+    raw_event       TEXT,
+    attributes      TEXT    NOT NULL DEFAULT '{}',  -- JSON blob
+    received_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_event_id  ON endpoint_events(event_id);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_device_id ON endpoint_events(device_id);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_timestamp ON endpoint_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_source    ON endpoint_events(source);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_type      ON endpoint_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_source_ip ON endpoint_events(source_ip);
 """
 
 
@@ -171,7 +194,7 @@ def check_database_integrity(conn: sqlite3.Connection) -> Dict[str, Any]:
 def get_database_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
     """Retrieve operational telemetry and storage statistics for SOC reporting."""
     table_counts = {}
-    for tbl in ["log_files", "events", "alerts", "alert_evidence", "incidents", "incident_notes"]:
+    for tbl in ["log_files", "events", "alerts", "alert_evidence", "incidents", "incident_notes", "endpoint_events"]:
         row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
         table_counts[tbl] = row["n"] if row else 0
 

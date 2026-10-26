@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 # Event type constants
 ACCEPTED_LOGIN = "accepted_login"
@@ -60,6 +60,8 @@ class Event:
     raw_line: str
     line_hash: str
     id: Optional[int] = None
+    is_invalid_user: bool = False
+    parsed_event: Optional[Any] = None
 
 
 @dataclass
