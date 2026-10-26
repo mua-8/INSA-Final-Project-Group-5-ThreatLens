@@ -1,0 +1,106 @@
+# ThreatLens Endpoint Agent Configuration
+# Safe defaults suitable for local development and production deployment.
+# Copy this file to agent.yaml to customize your installation.
+
+# Agent identity settings
+display_name: "threatlens-node-01"
+version: "0.1.0"
+
+# Local storage directory for durable state and the SQLite event queue.
+# Relative paths are resolved relative to the current working directory.
+data_dir: "data"
+
+# Application logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level: "INFO"
+
+# Maximum number of events to process and transmit in a single batch
+batch_size: 100
+
+# Durable local SQLite queue settings
+queue:
+  # Maximum number of events retained in the queue before applying retention policy
+  max_events: 50000
+  # Maximum disk space in megabytes allocated to the queue database
+  max_disk_mb: 500
+  # Retention policy for acknowledged events:
+  # - "delete_on_delivery": Remove events immediately after server acknowledgment
+  # - "retain_delivered": Keep events marked as 'delivered' until storage limits require pruning
+  retention_policy: "delete_on_delivery"
+
+# Secure transport settings
+transport:
+  # Backend API base URL.
+  # Leave null or comment out for offline / local-only development mode.
+  # Example: "https://siem.threatlens.internal"
+  backend_url: null
+
+  # Event ingestion endpoint path on the backend
+  events_endpoint: "/api/v1/events"
+
+  # Optional API key or bearer token.
+  # Recommendation: Inject this via THREATLENS_API_KEY environment variable
+  # rather than storing plaintext credentials on disk.
+  api_key: null
+
+  # Connection and request timeouts in seconds
+  connect_timeout_seconds: 10.0
+  read_timeout_seconds: 30.0
+
+  # Retry strategy with exponential backoff and jitter
+  max_retries: 5
+  backoff_base_seconds: 1.0
+  backoff_max_seconds: 60.0
+  jitter_ratio: 0.2
+
+  # TLS certificate validation
+  tls_verify: true
+  # Optional custom CA bundle path (e.g. for enterprise internal PKI)
+  ca_bundle: null
+
+# Telemetry and collector monitoring configuration
+monitoring:
+  # Heartbeat interval in seconds
+  heartbeat_interval_seconds: 60
+  # Enabled event collectors: e.g. ["linux_auth"]
+  enabled_collectors: ["linux_auth"]
+
+  # Linux-specific telemetry collector settings
+  linux:
+    # Candidate log files probed in priority order
+    candidate_paths:
+      - "/var/log/auth.log"
+      - "/var/log/secure"
+    # Enable systemd-journald fallback if log files are unavailable or restricted
+    enable_journald: true
+
+  # Windows-specific telemetry collector settings
+  windows:
+    # Enable or disable Windows event log collection
+    enabled: true
+    # Event channels to collect (Security is primary)
+    channels:
+      - "Security"
+    # Optional Sysmon collection (disabled by default; requires Sysmon to be installed)
+    enable_sysmon: false
+    # Sysmon operational channel path
+    sysmon_channel: "Microsoft-Windows-Sysmon/Operational"
+    # Query limit per poll cycle
+    batch_size: 100
+    # Polling frequency in seconds
+    poll_interval_seconds: 10.0
+    # Command line privacy: exclude command-line arguments from process creation events (default: false)
+    include_command_line: false
+
+# Local threat detection rules
+detection:
+  # Suspicious SSH authentication failure detection
+  ssh_bruteforce:
+    # Enable or disable the local detector
+    enabled: true
+    # Number of authentication failures required to trigger an alert
+    # Note: Default is 5. Tune this for your environment to avoid false positives.
+    threshold: 5
+    # Sliding time window in seconds during which failures are tracked
+    window_seconds: 120
+    # Time window to coalesce duplicate logs from a single attempt (e.g. invalid user notices)
+    coalesce_window_seconds: 2.0
