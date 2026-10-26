@@ -1,0 +1,16 @@
+Oct 26 06:12:30 server01 sshd[1001]: Failed password for invalid user admin from 192.0.2.10 port 44210 ssh2
+Oct 26 06:12:31 server01 sshd[1002]: Failed password for root from 192.0.2.10 port 44211 ssh2
+Oct 26 06:12:32 server01 sshd[1003]: Invalid user testuser from 203.0.113.50 port 55123
+Oct 26 06:12:33 server01 sshd[1004]: Accepted password for muadev from 192.0.2.10 port 44212 ssh2
+Oct 26 06:12:34 server01 sshd[1005]: Accepted publickey for muadev from 192.0.2.10 port 44213 ssh2: RSA SHA256:abc123456789
+Oct 26 06:12:35 server01 sshd[1006]: Failed publickey for invalid user ghost from 2001:db8::1 port 39821 ssh2: RSA SHA256:def987654321
+Oct 26 06:12:36 server01 sshd[1007]: Failed publickey for deployer from 192.0.2.10 port 44214 ssh2: ECDSA SHA256:xyz
+Oct 26 06:12:37 server01 sshd[1008]: Failed none for root from 192.0.2.10 port 44215 ssh2
+Oct 26 06:12:38 server01 sshd[1009]: Maximum authentication attempts exceeded for invalid user attacker from 192.0.2.10 port 44216 ssh2 [preauth]
+Oct 26 06:12:39 server01 sshd[1010]: Connection closed by authenticating user root 192.0.2.10 port 44217 [preauth]
+2026-10-26T06:12:40.123456+00:00 server01 sshd[1011]: Failed password for invalid user guest from [2001:db8::55] port 44218 ssh2
+Oct 26 06:12:41 server01 CRON[2001]: (root) CMD (/usr/local/bin/backup.sh)
+Oct 26 06:12:42 server01 sudo[2002]: pam_unix(sudo:session): session opened for user root by muadev(uid=1000)
+Oct 26 06:12:43 server01 systemd[1]: Unit disk-check.service failed to reload.
+Oct 26 06:12:44 server01 sshd[1012]: Bad line format without colon or message
+Oct 26 06:12:45 server01 sshd[1013]: Failed password for user from invalid-ip port invalid-port ssh2

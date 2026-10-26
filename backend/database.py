@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
+
 
 # --------------------------------------------------------------------------
 # Schema DDL
@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_source_ip  ON events(source_ip);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp  ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_username   ON events(username);
+CREATE INDEX IF NOT EXISTS idx_events_ip_time    ON events(source_ip, timestamp); -- Sliding window optimization
+
 
 CREATE TABLE IF NOT EXISTS alerts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +105,13 @@ CREATE TABLE IF NOT EXISTS incidents (
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS incident_alerts (
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    alert_id    INTEGER NOT NULL REFERENCES alerts(id)    ON DELETE CASCADE,
+    linked_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (incident_id, alert_id)
+);
+
 CREATE TABLE IF NOT EXISTS incident_alert (
     incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     alert_id    INTEGER NOT NULL REFERENCES alerts(id)    ON DELETE CASCADE,
@@ -114,12 +123,37 @@ CREATE TABLE IF NOT EXISTS incident_notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     author      TEXT    NOT NULL DEFAULT 'analyst',
-    note        TEXT    NOT NULL,
+    body        TEXT    NOT NULL DEFAULT '',
+    note        TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_incident_notes_incident ON incident_notes(incident_id);
+
+CREATE TABLE IF NOT EXISTS endpoint_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id        TEXT    NOT NULL UNIQUE,        -- UUIDv4 string from agent
+    device_id       TEXT    NOT NULL,
+    timestamp       TEXT    NOT NULL,               -- ISO-8601 UTC
+    source          TEXT    NOT NULL,               -- e.g. 'linux_auth', 'windows_event', 'sysmon'
+    event_type      TEXT    NOT NULL,
+    severity        TEXT    NOT NULL CHECK(severity IN ('informational','low','medium','high','critical')),
+    schema_version  TEXT    NOT NULL DEFAULT '1.0.0',
+    source_ip       TEXT,
+    username        TEXT,
+    raw_event       TEXT,
+    attributes      TEXT    NOT NULL DEFAULT '{}',  -- JSON blob
+    received_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_event_id  ON endpoint_events(event_id);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_device_id ON endpoint_events(device_id);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_timestamp ON endpoint_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_source    ON endpoint_events(source);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_type      ON endpoint_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_endpoint_events_source_ip ON endpoint_events(source_ip);
 """
+
 
 
 # --------------------------------------------------------------------------
@@ -127,11 +161,12 @@ CREATE INDEX IF NOT EXISTS idx_incident_notes_incident ON incident_notes(inciden
 # --------------------------------------------------------------------------
 
 def get_connection(db_path: str = "threatlens.db") -> sqlite3.Connection:
-    """Return an open SQLite connection with row factory and FK support."""
-    conn = sqlite3.connect(db_path)
+    """Return an open SQLite connection with row factory, WAL mode, and busy timeout."""
+    conn = sqlite3.connect(db_path, timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")   # better concurrent read performance
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -143,9 +178,42 @@ def init_db(db_path: str = "threatlens.db") -> sqlite3.Connection:
     return conn
 
 
+def check_database_integrity(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Perform low-level SQLite integrity and foreign key constraint verification."""
+    integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
+    integrity_status = integrity_row[0] if integrity_row else "unknown"
+
+    fk_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    return {
+        "integrity": integrity_status,
+        "is_healthy": (integrity_status == "ok" and len(fk_violations) == 0),
+        "foreign_key_violations": len(fk_violations),
+    }
+
+
+def get_database_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Retrieve operational telemetry and storage statistics for SOC reporting."""
+    table_counts = {}
+    for tbl in ["log_files", "events", "alerts", "alert_evidence", "incidents", "incident_notes", "endpoint_events"]:
+        row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
+        table_counts[tbl] = row["n"] if row else 0
+
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+
+    return {
+        "table_counts": table_counts,
+        "database_size_bytes": page_count * page_size,
+        "page_count": page_count,
+        "page_size": page_size,
+        "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
+    }
+
+
 # --------------------------------------------------------------------------
 # File-hash helper (duplicate-upload guard)
 # --------------------------------------------------------------------------
 
 def sha256_of(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+

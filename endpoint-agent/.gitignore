@@ -1,0 +1,56 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Local configuration and runtime data
+.env
+*.local.yaml
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Keep the test fixture required by the SSH parser tests
+!tests/fixtures/ssh_auth_samples.log

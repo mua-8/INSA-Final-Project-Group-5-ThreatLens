@@ -74,7 +74,7 @@ def insert_events_batch(conn: sqlite3.Connection, log_file_id: int,
                 ev["line_hash"],
             ),
         )
-        ids.append(cur.lastrowid if cur.lastrowid else None)
+        ids.append(cur.lastrowid if cur.rowcount > 0 else None)
     return ids
 
 
@@ -307,6 +307,10 @@ def update_incident_status(conn: sqlite3.Connection, incident_id: int,
 def link_alert_to_incident(conn: sqlite3.Connection, incident_id: int,
                              alert_id: int) -> None:
     conn.execute(
+        "INSERT OR IGNORE INTO incident_alerts (incident_id, alert_id) VALUES (?, ?)",
+        (incident_id, alert_id),
+    )
+    conn.execute(
         "INSERT OR IGNORE INTO incident_alert (incident_id, alert_id) VALUES (?, ?)",
         (incident_id, alert_id),
     )
@@ -332,8 +336,8 @@ def insert_incident_note(conn: sqlite3.Connection, incident_id: int,
     if not note:
         raise ValueError("note must not be empty")
     cur = conn.execute(
-        "INSERT INTO incident_notes (incident_id, author, note) VALUES (?, ?, ?)",
-        (incident_id, author.strip() or "analyst", note),
+        "INSERT INTO incident_notes (incident_id, author, body, note) VALUES (?, ?, ?, ?)",
+        (incident_id, author.strip() or "analyst", note, note),
     )
     # bump incident updated_at
     conn.execute(
@@ -343,9 +347,108 @@ def insert_incident_note(conn: sqlite3.Connection, incident_id: int,
     return cur.lastrowid
 
 
+
 def list_incident_notes(conn: sqlite3.Connection,
                          incident_id: int) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM incident_notes WHERE incident_id=? ORDER BY created_at",
         (incident_id,),
     ).fetchall()
+
+
+# --------------------------------------------------------------------------
+# endpoint_events
+# --------------------------------------------------------------------------
+
+def get_endpoint_event(conn: sqlite3.Connection, event_id: str) -> Optional[sqlite3.Row]:
+    """Retrieve a single endpoint event by its unique UUID event_id."""
+    return conn.execute(
+        "SELECT * FROM endpoint_events WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+
+
+def insert_endpoint_event(
+    conn: sqlite3.Connection,
+    event_id: str,
+    device_id: str,
+    timestamp: str,
+    source: str,
+    event_type: str,
+    severity: str,
+    schema_version: str = "1.0.0",
+    source_ip: Optional[str] = None,
+    username: Optional[str] = None,
+    raw_event: Optional[str] = None,
+    attributes: str = "{}",
+) -> int:
+    """Insert an endpoint event record. Returns the new integer row id."""
+    cur = conn.execute(
+        """INSERT INTO endpoint_events
+           (event_id, device_id, timestamp, source, event_type, severity,
+            schema_version, source_ip, username, raw_event, attributes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            event_id,
+            device_id,
+            timestamp,
+            source,
+            event_type,
+            severity,
+            schema_version,
+            source_ip,
+            username,
+            raw_event,
+            attributes,
+        ),
+    )
+    return cur.lastrowid
+
+
+def list_endpoint_events(
+    conn: sqlite3.Connection,
+    device_id: Optional[str] = None,
+    source: Optional[str] = None,
+    event_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    source_ip: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[sqlite3.Row]:
+    """Filtered endpoint events query."""
+    clauses, params = [], []
+    if device_id:
+        clauses.append("device_id = ?")
+        params.append(device_id)
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if severity:
+        clauses.append("severity = ?")
+        params.append(severity)
+    if source_ip:
+        clauses.append("source_ip = ?")
+        params.append(source_ip)
+    if since:
+        clauses.append("timestamp >= ?")
+        params.append(since)
+    if until:
+        clauses.append("timestamp <= ?")
+        params.append(until)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    return conn.execute(
+        f"SELECT * FROM endpoint_events {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        params,
+    ).fetchall()
+
+
+def count_endpoint_events(conn: sqlite3.Connection) -> int:
+    """Return total number of endpoint events stored."""
+    return conn.execute("SELECT COUNT(*) FROM endpoint_events").fetchone()[0]
