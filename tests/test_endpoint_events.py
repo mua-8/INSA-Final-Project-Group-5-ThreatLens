@@ -640,6 +640,369 @@ class TestEndpointAgentIntegration(unittest.TestCase):
         # Verify endpoint_events has the 2 events
         self.assertEqual(repo.count_endpoint_events(self.conn), 2)
 
+    # =========================================================================
+    # 6. SIEM Pipeline Processing & Dashboard Integration Tests
+    # =========================================================================
+
+    def test_endpoint_ssh_auth_failure_persisted_and_processed(self):
+        """Scenario 1: Valid endpoint SSH authentication failure enters SIEM events and stats."""
+        ev = self._sample_event(
+            source="linux_auth",
+            event_type="ssh_auth_failure",
+            severity="high",
+            source_ip="192.168.1.50",
+            username="admin",
+            attributes={"auth_method": "password", "port": 44211},
+        )
+        resp = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": [ev]}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        # 1. Persisted in endpoint_events
+        self.assertEqual(repo.count_endpoint_events(self.conn), 1)
+
+        # 2. Adapted and stored in events table
+        self.assertEqual(repo.count_events(self.conn), 1)
+        events = repo.list_events(self.conn)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "failed_login")
+        self.assertEqual(events[0]["outcome"], "failure")
+        self.assertEqual(events[0]["source_ip"], "192.168.1.50")
+        self.assertEqual(events[0]["username"], "admin")
+        self.assertEqual(events[0]["method"], "password")
+
+        # 3. Available via GET /api/events
+        resp_events = self.client.get("/api/events")
+        self.assertEqual(resp_events.status_code, 200)
+        self.assertEqual(resp_events.get_json()["count"], 1)
+
+        # 4. Reflected in GET /api/statistics
+        resp_stats = self.client.get("/api/statistics")
+        self.assertEqual(resp_stats.status_code, 200)
+        data = resp_stats.get_json()["data"]
+        self.assertEqual(data["total_events"], 1)
+        self.assertEqual(data["failed"], 1)
+        self.assertEqual(data["accepted"], 0)
+
+    def test_endpoint_ssh_invalid_user_persisted_and_processed(self):
+        """Scenario 2: Valid invalid-user event is mapped consistently."""
+        ev = self._sample_event(
+            source="linux_auth",
+            event_type="ssh_invalid_user",
+            severity="medium",
+            source_ip="192.168.1.55",
+            username="nonexistent",
+            attributes={"invalid_user": True, "port": 44212},
+        )
+        resp = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": [ev]}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        self.assertEqual(repo.count_events(self.conn), 1)
+        events = repo.list_events(self.conn)
+        self.assertEqual(events[0]["event_type"], "invalid_user")
+        self.assertEqual(events[0]["outcome"], "failure")
+
+        resp_stats = self.client.get("/api/statistics")
+        self.assertEqual(resp_stats.status_code, 200)
+        data = resp_stats.get_json()["data"]
+        self.assertEqual(data["total_events"], 1)
+        self.assertEqual(data["failed"], 1)
+
+    def test_endpoint_batch_triggers_detection_rule_alert_and_evidence(self):
+        """Scenario 3: Batch meeting DR-01 threshold (5 failures / 5 min) creates alert with evidence."""
+        now = datetime(2026, 10, 26, 10, 0, 0, tzinfo=timezone.utc)
+        events = [
+            self._sample_event(
+                timestamp=(now.replace(minute=i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="198.51.100.99",
+                username="alice",
+                attributes={"auth_method": "password", "port": 40000 + i},
+            )
+            for i in range(5)
+        ]
+        resp = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": events}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        # Alert generated in alerts table
+        alerts = repo.list_alerts(self.conn)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["rule_id"], "DR-01")
+        self.assertEqual(alerts[0]["source_ip"], "198.51.100.99")
+
+        # Evidence events linked
+        evidence = repo.get_alert_evidence(self.conn, alerts[0]["id"])
+        self.assertEqual(len(evidence), 5)
+
+        # Verified via GET /api/alerts
+        resp_alerts = self.client.get("/api/alerts")
+        self.assertEqual(resp_alerts.status_code, 200)
+        self.assertEqual(resp_alerts.get_json()["count"], 1)
+
+        # Verified via GET /api/alerts/<id>
+        resp_alert_detail = self.client.get(f"/api/alerts/{alerts[0]['id']}")
+        self.assertEqual(resp_alert_detail.status_code, 200)
+        self.assertEqual(len(resp_alert_detail.get_json()["data"]["evidence"]), 5)
+
+    def test_identical_retry_does_not_duplicate_events_or_alerts(self):
+        """Scenario 4: Identical retry does not duplicate normalized events or alerts."""
+        now = datetime(2026, 10, 26, 10, 0, 0, tzinfo=timezone.utc)
+        events = [
+            self._sample_event(
+                timestamp=(now.replace(minute=i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="198.51.100.88",
+                username="bob",
+                attributes={"auth_method": "password", "port": 40100 + i},
+            )
+            for i in range(5)
+        ]
+        payload = {"device_id": "dev-node-001", "events": events}
+
+        # First transmission
+        resp1 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps(payload),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(repo.count_events(self.conn), 5)
+        self.assertEqual(len(repo.list_alerts(self.conn)), 1)
+
+        # Identical retry
+        resp2 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps(payload),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp2.status_code, 200)
+        # Event and alert counts remain exactly the same
+        self.assertEqual(repo.count_events(self.conn), 5)
+        self.assertEqual(len(repo.list_alerts(self.conn)), 1)
+
+        # Statistics remain accurate
+        stats = self.client.get("/api/statistics").get_json()["data"]
+        self.assertEqual(stats["total_events"], 5)
+        self.assertEqual(stats["total_alerts"], 1)
+
+    def test_statistics_reflect_events_and_alerts_accurately(self):
+        """Scenario 6: GET /api/statistics reports correct totals, breakdown, and top IPs."""
+        now = datetime(2026, 10, 26, 11, 0, 0, tzinfo=timezone.utc)
+        events = [
+            self._sample_event(
+                timestamp=(now.replace(minute=i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="192.168.10.10",
+                username="userA",
+                attributes={"auth_method": "password", "port": 41000 + i},
+            )
+            for i in range(5)
+        ]
+        events.append(
+            self._sample_event(
+                timestamp=now.replace(minute=6).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_success",
+                severity="informational",
+                source_ip="192.168.10.20",
+                username="userB",
+                attributes={"auth_method": "password", "port": 41006},
+            )
+        )
+
+        resp = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": events}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        stats = self.client.get("/api/statistics").get_json()["data"]
+        self.assertEqual(stats["total_events"], 6)
+        self.assertEqual(stats["failed"], 5)
+        self.assertEqual(stats["accepted"], 1)
+        self.assertEqual(stats["unique_ips"], 2)
+        self.assertEqual(stats["unique_users"], 2)
+        self.assertEqual(stats["total_alerts"], 1)
+
+    def test_unsupported_event_types_handled_explicitly_without_database_corruption(self):
+        """Scenario 8: Unsupported/unmappable event types are stored in endpoint_events without corrupting DB."""
+        ev_proc = self._sample_event(
+            source="endpoint_agent",
+            event_type="PROCESS_START",
+            severity="low",
+            source_ip="10.0.0.1",
+            username="muadev",
+            raw_event="Process start test",
+            attributes={"process": "bash"},
+        )
+        resp = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": [ev_proc]}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        # Saved to endpoint_events
+        self.assertEqual(repo.count_endpoint_events(self.conn), 1)
+        # Not saved to SIEM events table
+        self.assertEqual(repo.count_events(self.conn), 0)
+
+        # Database integrity check
+        check = self.client.get("/api/health").get_json()["database"]
+        self.assertEqual(check["integrity"], "ok")
+        self.assertEqual(check["foreign_key_violations"], 0)
+
+    def test_detection_engine_consistent_across_restart_and_hydration(self):
+        """Scenario 10: Detection engine hydrates state across simulated restart."""
+        now = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
+        events_part1 = [
+            self._sample_event(
+                timestamp=(now.replace(minute=i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="203.0.113.77",
+                username="charlie",
+                attributes={"auth_method": "password", "port": 42000 + i},
+            )
+            for i in range(3)
+        ]
+
+        resp1 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": events_part1}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(len(repo.list_alerts(self.conn)), 0)
+
+        # Simulate restart: reset engine
+        api.reset_detection_engine(self.db_path)
+
+        events_part2 = [
+            self._sample_event(
+                timestamp=(now.replace(minute=3 + i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="203.0.113.77",
+                username="charlie",
+                attributes={"auth_method": "password", "port": 42003 + i},
+            )
+            for i in range(2)
+        ]
+        resp2 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "dev-node-001", "events": events_part2}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp2.status_code, 200)
+
+        # Engine hydrated past events from SQLite, so 3 + 2 = 5 failures triggered DR-01!
+        alerts = repo.list_alerts(self.conn)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["rule_id"], "DR-01")
+        evidence = repo.get_alert_evidence(self.conn, alerts[0]["id"])
+        self.assertEqual(len(evidence), 5)
+
+    def test_loopback_isolation_does_not_aggregate_unrelated_hosts(self):
+        """Loopback traffic (127.0.0.1) from separate hosts must NOT be aggregated into one window."""
+        now = datetime(2026, 10, 26, 13, 0, 0, tzinfo=timezone.utc)
+        # Host 1 generates 3 failures from 127.0.0.1
+        host1_events = [
+            self._sample_event(
+                device_id="host-1",
+                timestamp=(now.replace(minute=i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="127.0.0.1",
+                username="testuser",
+                attributes={"auth_method": "password", "target_host": "host-1", "port": 43000 + i},
+            )
+            for i in range(3)
+        ]
+        # Host 2 generates 3 failures from 127.0.0.1
+        host2_events = [
+            self._sample_event(
+                device_id="host-2",
+                timestamp=(now.replace(minute=i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="127.0.0.1",
+                username="testuser",
+                attributes={"auth_method": "password", "target_host": "host-2", "port": 43100 + i},
+            )
+            for i in range(3)
+        ]
+
+        resp1 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "host-1", "events": host1_events}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp1.status_code, 200)
+
+        resp2 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "host-2", "events": host2_events}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp2.status_code, 200)
+
+        # Neither host has 5 failures, so NO alert should be generated
+        alerts = repo.list_alerts(self.conn)
+        self.assertEqual(len(alerts), 0)
+
+        # Host 1 now generates 2 more failures (total 5 for Host 1)
+        host1_more = [
+            self._sample_event(
+                device_id="host-1",
+                timestamp=(now.replace(minute=3 + i)).isoformat(),
+                source="linux_auth",
+                event_type="ssh_auth_failure",
+                severity="high",
+                source_ip="127.0.0.1",
+                username="testuser",
+                attributes={"auth_method": "password", "target_host": "host-1", "port": 43003 + i},
+            )
+            for i in range(2)
+        ]
+        resp3 = self.client.post(
+            "/api/v1/events",
+            data=json.dumps({"device_id": "host-1", "events": host1_more}),
+            headers=self._auth_headers(),
+        )
+        self.assertEqual(resp3.status_code, 200)
+
+        # Exactly 1 alert generated for Host 1
+        alerts = repo.list_alerts(self.conn)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["rule_id"], "DR-01")
+        evidence = repo.get_alert_evidence(self.conn, alerts[0]["id"])
+        self.assertEqual(len(evidence), 5)
+        # All evidence events must belong to host-1
+        self.assertTrue(all(e["host"] == "host-1" for e in evidence))
+
 
 if __name__ == "__main__":
     unittest.main()

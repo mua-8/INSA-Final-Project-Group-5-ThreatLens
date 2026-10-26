@@ -85,6 +85,7 @@ def get_db():
     """Return a database connection for this request, ensuring schema exists."""
     if "db" not in g:
         g.db = init_db(DB_PATH)
+        get_detection_engine(DB_PATH)
     return g.db
 
 
@@ -179,7 +180,8 @@ def _hydrate_engine_from_db(db_path: str, engine) -> None:
                 id=r["id"],
             )
             events_by_id[ev.id] = ev
-            bucket = engine._history.setdefault(ev.source_ip, {})
+            hkey = engine._history_key(ev.source_ip, ev.host)
+            bucket = engine._history.setdefault(hkey, {})
             bucket[ev.line_hash] = ev
 
         # 2. Hydrate alerts into engine.alerts
@@ -232,7 +234,100 @@ def _hydrate_engine_from_db(db_path: str, engine) -> None:
             if ar["id"] >= engine._next_id:
                 engine._next_id = ar["id"] + 1
 
+        # 3. Synchronize any existing unadapted endpoint events
+        _sync_endpoint_events_to_siem(conn, engine)
+
         conn.close()
+    except Exception:
+        pass
+
+
+def _sync_endpoint_events_to_siem(conn: sqlite3.Connection, engine) -> None:
+    """Backfill and synchronize unadapted endpoint events into SIEM events and detection."""
+    try:
+        from backend.adapter import adapt_endpoint_event_to_backend
+        table_check = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='endpoint_events'"
+        ).fetchone()
+        if not table_check or table_check[0] == 0:
+            return
+
+        unadapted_rows = conn.execute(
+            "SELECT * FROM endpoint_events WHERE source IN ('linux_auth', 'openssh', 'endpoint_agent') "
+            "AND event_type IN ('ssh_auth_failure', 'ssh_invalid_user', 'ssh_auth_success', 'ssh_disconnect', "
+            "'failed_login', 'invalid_user', 'accepted_login', 'disconnect') "
+            "ORDER BY timestamp ASC, id ASC"
+        ).fetchall()
+        if not unadapted_rows:
+            return
+
+        existing_hashes = {
+            r[0] for r in conn.execute("SELECT line_hash FROM events").fetchall()
+        }
+
+        new_adapted_events = []
+        with conn:
+            for r in unadapted_rows:
+                ev = adapt_endpoint_event_to_backend(dict(r))
+                if ev is None or ev.line_hash in existing_hashes:
+                    continue
+
+                log_file_id = repo.get_or_create_endpoint_log_file(conn, r["device_id"])
+                ev_dict = {
+                    "timestamp": ev.timestamp.isoformat(),
+                    "host": getattr(ev, "host", None),
+                    "username": ev.username,
+                    "source_ip": ev.source_ip,
+                    "port": ev.port,
+                    "method": ev.method,
+                    "outcome": ev.outcome,
+                    "event_type": ev.event_type,
+                    "raw_line": ev.raw_line,
+                    "line_hash": ev.line_hash,
+                }
+                db_ids = repo.insert_events_batch(conn, log_file_id, [ev_dict])
+                if db_ids and db_ids[0]:
+                    ev.id = db_ids[0]
+                    new_adapted_events.append(ev)
+                    existing_hashes.add(ev.line_hash)
+
+            if new_adapted_events and engine is not None:
+                result = engine.process(new_adapted_events)
+                if result:
+                    for alert in result.new_alerts:
+                        alert_row = {
+                            "rule_id": alert.rule_id,
+                            "rule_name": alert.rule_name,
+                            "severity": alert.severity,
+                            "status": alert.status,
+                            "source_ip": alert.source_ip,
+                            "first_seen": alert.first_seen.isoformat(),
+                            "last_seen": alert.last_seen.isoformat(),
+                            "summary": alert.summary,
+                            "explanation": alert.explanation,
+                            "settings": alert.settings,
+                        }
+                        db_alert_id = repo.insert_alert(conn, alert_row)
+                        alert.id = db_alert_id
+                        evidence_db_ids = [
+                            e.id for e in alert.events.values() if hasattr(e, "id") and e.id
+                        ]
+                        repo.insert_alert_evidence(conn, db_alert_id, evidence_db_ids)
+
+                    for alert in result.updated_alerts:
+                        if alert.id:
+                            repo.update_alert(
+                                conn,
+                                alert.id,
+                                severity=alert.severity,
+                                last_seen=alert.last_seen.isoformat(),
+                                summary=alert.summary,
+                                explanation=alert.explanation,
+                            )
+                            evidence_db_ids = [
+                                e.id for e in alert.events.values() if hasattr(e, "id") and e.id
+                            ]
+                            repo.insert_alert_evidence(conn, alert.id, evidence_db_ids)
     except Exception:
         pass
 
@@ -554,6 +649,10 @@ def ingest_endpoint_events():
 
     if to_insert:
         try:
+            from backend.adapter import adapt_endpoint_event_to_backend
+            engine = get_detection_engine(DB_PATH)
+            new_adapted_events = []
+
             with conn:
                 for rec in to_insert:
                     repo.insert_endpoint_event(
@@ -571,6 +670,64 @@ def ingest_endpoint_events():
                         attributes=json.dumps(rec["attributes"], sort_keys=True),
                     )
                     acknowledged_ids.append(rec["event_id"])
+
+                    ev = adapt_endpoint_event_to_backend(rec)
+                    if ev is not None:
+                        log_file_id = repo.get_or_create_endpoint_log_file(conn, rec["device_id"])
+                        ev_dict = {
+                            "timestamp": ev.timestamp.isoformat(),
+                            "host": getattr(ev, "host", None),
+                            "username": ev.username,
+                            "source_ip": ev.source_ip,
+                            "port": ev.port,
+                            "method": ev.method,
+                            "outcome": ev.outcome,
+                            "event_type": ev.event_type,
+                            "raw_line": ev.raw_line,
+                            "line_hash": ev.line_hash,
+                        }
+                        db_ids = repo.insert_events_batch(conn, log_file_id, [ev_dict])
+                        if db_ids and db_ids[0]:
+                            ev.id = db_ids[0]
+                            new_adapted_events.append(ev)
+
+                if new_adapted_events and engine is not None:
+                    result = engine.process(new_adapted_events)
+                    if result:
+                        for alert in result.new_alerts:
+                            alert_row = {
+                                "rule_id": alert.rule_id,
+                                "rule_name": alert.rule_name,
+                                "severity": alert.severity,
+                                "status": alert.status,
+                                "source_ip": alert.source_ip,
+                                "first_seen": alert.first_seen.isoformat(),
+                                "last_seen": alert.last_seen.isoformat(),
+                                "summary": alert.summary,
+                                "explanation": alert.explanation,
+                                "settings": alert.settings,
+                            }
+                            db_alert_id = repo.insert_alert(conn, alert_row)
+                            alert.id = db_alert_id
+                            evidence_db_ids = [
+                                e.id for e in alert.events.values() if hasattr(e, "id") and e.id
+                            ]
+                            repo.insert_alert_evidence(conn, db_alert_id, evidence_db_ids)
+
+                        for alert in result.updated_alerts:
+                            if alert.id:
+                                repo.update_alert(
+                                    conn,
+                                    alert.id,
+                                    severity=alert.severity,
+                                    last_seen=alert.last_seen.isoformat(),
+                                    summary=alert.summary,
+                                    explanation=alert.explanation,
+                                )
+                                evidence_db_ids = [
+                                    e.id for e in alert.events.values() if hasattr(e, "id") and e.id
+                                ]
+                                repo.insert_alert_evidence(conn, alert.id, evidence_db_ids)
         except sqlite3.IntegrityError as exc:
             return jsonify({
                 "ok": False,

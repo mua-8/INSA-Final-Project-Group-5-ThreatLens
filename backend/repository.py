@@ -9,6 +9,7 @@ ever used to build SQL, preventing SQL injection.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
@@ -40,6 +41,28 @@ def list_log_files(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM log_files ORDER BY uploaded_at DESC"
     ).fetchall()
+
+
+def get_or_create_endpoint_log_file(conn: sqlite3.Connection, device_id: str) -> int:
+    """Retrieve or create a deterministic log_files record for an endpoint device.
+
+    Allows endpoint events to satisfy the foreign key constraint
+    events.log_file_id -> log_files(id).
+    """
+    clean_id = (device_id or "unknown").strip()
+    filename = f"endpoint-agent:{clean_id}"
+    file_hash = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    row = conn.execute(
+        "SELECT id FROM log_files WHERE file_hash = ?", (file_hash,)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        """INSERT INTO log_files (filename, file_hash, line_count, event_count, malformed_count)
+           VALUES (?, ?, 0, 0, 0)""",
+        (filename, file_hash),
+    )
+    return cur.lastrowid
 
 
 # --------------------------------------------------------------------------

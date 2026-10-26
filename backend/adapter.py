@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
@@ -25,6 +26,17 @@ EVENT_TYPE_MAP = {
     AuthEventType.ACCEPTED_LOGIN: ACCEPTED_LOGIN,
     AuthEventType.DISCONNECT: DISCONNECT,
     AuthEventType.UNKNOWN: UNKNOWN,
+}
+
+ENDPOINT_EVENT_TYPE_MAP = {
+    "ssh_auth_failure": (FAILED_LOGIN, "failure"),
+    "failed_login": (FAILED_LOGIN, "failure"),
+    "ssh_invalid_user": (INVALID_USER, "failure"),
+    "invalid_user": (INVALID_USER, "failure"),
+    "ssh_auth_success": (ACCEPTED_LOGIN, "success"),
+    "accepted_login": (ACCEPTED_LOGIN, "success"),
+    "ssh_disconnect": (DISCONNECT, "unknown"),
+    "disconnect": (DISCONNECT, "unknown"),
 }
 
 
@@ -201,3 +213,125 @@ def parse_and_adapt(text: str, year: int) -> ParseResult:
                 malformed += 1
 
     return ParseResult(events=events, malformed_count=malformed)
+
+
+def adapt_endpoint_event_to_backend(data: Any) -> Optional[Event]:
+    """Convert an endpoint event record or dictionary to a backend Event.
+
+    Converts valid SSH authentication, invalid user, and disconnect telemetry
+    from endpoint agents into backend.parser.Event instances.
+
+    Explicitly ignores non-SSH sources (such as windows_event, sysmon, agent
+    internals) and unsupported event types, safely returning None without
+    corrupting SIEM event state or misclassifying telemetry.
+    """
+    if data is None:
+        return None
+
+    if hasattr(data, "keys"):
+        d = dict(data)
+    elif isinstance(data, dict):
+        d = data
+    else:
+        return None
+
+    source = (d.get("source") or "").strip().lower()
+    # Explicitly reject non-SSH sources (e.g. Windows logon, Sysmon process telemetry)
+    if source in ("windows_event", "sysmon"):
+        return None
+
+    event_type = (d.get("event_type") or "").strip()
+    if event_type not in ENDPOINT_EVENT_TYPE_MAP:
+        return None
+
+    backend_type, outcome = ENDPOINT_EVENT_TYPE_MAP[event_type]
+
+    # Parse attributes
+    attrs = d.get("attributes")
+    if isinstance(attrs, str):
+        try:
+            attrs = json.loads(attrs)
+        except Exception:
+            attrs = {}
+    elif not isinstance(attrs, dict):
+        attrs = {}
+
+    # Parse timestamp
+    ts_raw = d.get("timestamp")
+    if not ts_raw:
+        return None
+    try:
+        ts_parse = str(ts_raw).strip()
+        if ts_parse.endswith("Z") or ts_parse.endswith("z"):
+            ts_parse = ts_parse[:-1] + "+00:00"
+        dt = datetime.fromisoformat(ts_parse)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+    # Derive host (preserve target_host if provided by collector, else host, else device_id)
+    host = attrs.get("target_host") or attrs.get("host") or d.get("device_id")
+    if host is not None:
+        host = str(host).strip()
+
+    # Username
+    username = d.get("username") or attrs.get("username")
+    if username is not None:
+        username = str(username).strip()
+
+    # Source IP
+    source_ip = d.get("source_ip")
+    if source_ip is not None:
+        source_ip = str(source_ip).strip().strip("[]")
+
+    # Port
+    port = attrs.get("port") or d.get("port")
+    port_val = None
+    if port is not None:
+        try:
+            port_val = int(port)
+        except (ValueError, TypeError):
+            port_val = None
+
+    # Method & invalid_user flag
+    is_invalid_user = bool(attrs.get("invalid_user", False)) or (backend_type == INVALID_USER)
+
+    if backend_type == FAILED_LOGIN:
+        failure_reason = attrs.get("failure_reason")
+        if failure_reason in ("preauth_connection_closed", "max_attempts_exceeded"):
+            method = attrs.get("auth_method")
+        else:
+            method = attrs.get("auth_method") or "password"
+    elif backend_type == ACCEPTED_LOGIN:
+        method = attrs.get("auth_method") or "password"
+    else:
+        method = None
+
+    # Raw line
+    raw_event = d.get("raw_event")
+    if raw_event and str(raw_event).strip():
+        raw_line = str(raw_event).strip()
+    else:
+        raw_line = f"{dt.isoformat()} {host or 'unknown'} sshd: {event_type} for {username or 'unknown'} from {source_ip or 'unknown'}"
+
+    # Line hash: deterministic per event_id to prevent collision between distinct events
+    eid = d.get("event_id")
+    if eid:
+        line_hash = compute_line_hash(f"endpoint:{eid}")
+    else:
+        line_hash = compute_line_hash(raw_line)
+
+    return Event(
+        timestamp=dt,
+        host=host,
+        username=username,
+        source_ip=source_ip,
+        port=port_val,
+        method=method,
+        outcome=outcome,
+        event_type=backend_type,
+        raw_line=raw_line,
+        line_hash=line_hash,
+        is_invalid_user=is_invalid_user,
+    )
