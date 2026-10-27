@@ -710,6 +710,71 @@ class TestThreatLensIntegration(unittest.TestCase):
         self.assertEqual(ref_time.month, 2)
         self.assertEqual(ref_time.day, 28)
 
+    # --------------------------------------------------------------------------
+    # Regression Test 6: Dynamic rule toggle synchronization and suppression
+    # --------------------------------------------------------------------------
+    def test_regression_rule_toggle_synchronization_and_suppression(self):
+        """Verify that disabling a detection rule via API immediately updates the
+        in-memory detection engine and prevents the rule from generating alerts.
+        """
+        # 1. Toggle DR-01 to disabled
+        resp_toggle = self.client.patch("/api/rules/DR-01/toggle", json={"enabled": False})
+        self.assertEqual(resp_toggle.status_code, 200)
+        rule_row = self.conn.execute("SELECT enabled FROM detection_rules WHERE rule_id = 'DR-01'").fetchone()
+        self.assertEqual(rule_row["enabled"], 0)
+
+        # 2. Ingest 10 failed logins that would normally trigger DR-01
+        lines = [
+            f"Oct 25 18:00:{i:02d} srv sshd[{1000+i}]: Failed password for user{i} from 192.0.2.77 port {50000+i} ssh2\n".encode("utf-8")
+            for i in range(10)
+        ]
+        resp_ingest = self.client.post("/api/ingest?simulate=true", data=b"".join(lines))
+        self.assertEqual(resp_ingest.status_code, 201)
+
+        # 3. Confirm NO DR-01 alert is created for the disabled rule
+        dr01_alerts = self.conn.execute("SELECT * FROM alerts WHERE rule_id = 'DR-01' AND source_ip = '192.0.2.77'").fetchall()
+        self.assertEqual(len(dr01_alerts), 0, "Disabled rule DR-01 must not raise alerts")
+
+        # 4. Re-enable DR-01
+        resp_reenable = self.client.patch("/api/rules/DR-01/toggle", json={"enabled": True})
+        self.assertEqual(resp_reenable.status_code, 200)
+
+        # 5. Ingest 10 failed logins from a new IP -> DR-01 MUST fire
+        lines2 = [
+            f"Oct 25 18:05:{i:02d} srv sshd[{2000+i}]: Failed password for user{i} from 192.0.2.88 port {51000+i} ssh2\n".encode("utf-8")
+            for i in range(10)
+        ]
+        resp_ingest2 = self.client.post("/api/ingest?simulate=true", data=b"".join(lines2))
+        self.assertEqual(resp_ingest2.status_code, 201)
+        dr01_alerts2 = self.conn.execute("SELECT * FROM alerts WHERE rule_id = 'DR-01' AND source_ip = '192.0.2.88'").fetchall()
+        self.assertEqual(len(dr01_alerts2), 1, "Re-enabled rule DR-01 must fire when triggered")
+
+    # --------------------------------------------------------------------------
+    # Regression Test 7: Dynamic rule threshold adjustment in detection engine
+    # --------------------------------------------------------------------------
+    def test_regression_rule_threshold_adjustment(self):
+        """Verify that adjusting a rule threshold via API immediately updates the
+        in-memory detection engine and alters firing behavior.
+        """
+        # 1. Update DR-01 threshold from 5 to 3
+        resp_update = self.client.patch("/api/rules/DR-01", json={"threshold": 3})
+        self.assertEqual(resp_update.status_code, 200)
+
+        # 2. Ingest exactly 3 failed logins (sub-threshold under default 5, but meets new threshold 3)
+        lines = [
+            f"Oct 25 18:10:{i:02d} srv sshd[{3000+i}]: Failed password for victim from 192.0.2.99 port {52000+i} ssh2\n".encode("utf-8")
+            for i in range(3)
+        ]
+        resp_ingest = self.client.post("/api/ingest?simulate=true", data=b"".join(lines))
+        self.assertEqual(resp_ingest.status_code, 201)
+
+        # 3. Confirm DR-01 fired at the adjusted threshold of 3
+        dr01_alerts = self.conn.execute("SELECT * FROM alerts WHERE rule_id = 'DR-01' AND source_ip = '192.0.2.99'").fetchall()
+        self.assertEqual(len(dr01_alerts), 1, "DR-01 must fire at the new lowered threshold of 3")
+        # Evidence check
+        evidence = self.conn.execute("SELECT count(*) FROM alert_evidence WHERE alert_id = ?", (dr01_alerts[0]["id"],)).fetchone()[0]
+        self.assertEqual(evidence, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

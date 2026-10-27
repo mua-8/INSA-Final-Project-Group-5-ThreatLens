@@ -988,7 +988,7 @@ def ingest():
             existing_row = _row(existing)
             return _ok({
                 "duplicate": True,
-                "message": f"This exact log file was already ingested as File #{existing_row.get('id', '?')} ({existing_row.get('filename')}). No duplicate records were inserted.",
+                "message": "This file has already been uploaded.",
                 "log_file": existing_row,
                 "total_lines": existing_row.get("line_count", 0),
                 "submitted_lines": existing_row.get("line_count", 0),
@@ -1726,6 +1726,10 @@ def create_detection_rule():
         return _err(f"Failed to create detection rule: {exc}")
     conn.commit()
     created = repo.get_detection_rule(conn, rule_id)
+    if created:
+        created_dict = dict(created)
+        for active_engine in _detection_engines.values():
+            sync_rule_to_engine(active_engine, created_dict)
     return _ok(_format_rule(created), 201)
 
 
@@ -1774,6 +1778,10 @@ def update_detection_rule(rule_id: str):
         return _err(str(exc))
     conn.commit()
     updated = repo.get_detection_rule(conn, rule_id)
+    if updated:
+        updated_dict = dict(updated)
+        for active_engine in _detection_engines.values():
+            sync_rule_to_engine(active_engine, updated_dict)
     return _ok(_format_rule(updated))
 
 
@@ -1801,6 +1809,10 @@ def toggle_detection_rule(rule_id: str):
     )
     conn.commit()
     updated = repo.get_detection_rule(conn, rule_id)
+    if updated:
+        updated_dict = dict(updated)
+        for active_engine in _detection_engines.values():
+            sync_rule_to_engine(active_engine, updated_dict)
     return _ok(_format_rule(updated))
 
 

@@ -230,6 +230,8 @@ class Alert:
     def refresh(self) -> None:
         """Recompute times, evidence list, severity, target host and text from the evidence."""
         ordered = sorted(self.events.items(), key=lambda item: (item[1].timestamp, str(item[0])))
+        if not ordered:
+            return
         self.evidence_ids = [ref for ref, _ in ordered]
         self.first_seen = ordered[0][1].timestamp
         self.last_seen = ordered[-1][1].timestamp
@@ -545,8 +547,8 @@ class DetectionEngine:
                 if ip is None and rule_id != "DR-05":
                     # Rules DR-01 through DR-04 require a valid source IP for correlation
                     continue
-                settings = self.config.rules[rule_id]
-                if settings["enabled"]:
+                settings = self.config.rules.get(rule_id)
+                if settings and settings.get("enabled"):
                     candidates.extend(detector(ip, events, settings, self.config.dedupe_gap))
 
         created, updated = _correlate(candidates, self.alerts, self.config.dedupe_gap)
