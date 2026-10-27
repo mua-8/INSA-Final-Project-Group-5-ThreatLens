@@ -335,4 +335,3 @@ def adapt_endpoint_event_to_backend(data: Any) -> Optional[Event]:
         line_hash=line_hash,
         is_invalid_user=is_invalid_user,
     )
->>>>>>> origin/main
