@@ -88,11 +88,11 @@ export default function Header({
           {/* Target Public Website Button */}
           <button
             onClick={onSwitchToVictim}
-            title="Launch Apex Federal Bank target site to test attacks directly"
+            title="Open Apex Federal Trust Bank customer portal"
             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-3.5 py-2 text-white shadow-lg shadow-cyan-600/25 transition active:scale-95 border border-cyan-400/30"
           >
             <FaGlobe size={13} className="text-cyan-200" />
-            <span>Target Web Portal</span>
+            <span>Apex Bank Portal</span>
           </button>
 
           {/* Active Defense & Quarantine Center */}
@@ -110,15 +110,15 @@ export default function Header({
             )}
           </button>
 
-          {/* Interactive Tester Center Modal Trigger */}
+          {/* Verification Suite Modal Trigger */}
           <button
             onClick={onOpenTesterCenter}
-            title="Open Test Suite & SQLi Fuzzer Explorer"
+            title="Open Security Verification Suite & Fuzzer Explorer"
             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-3.5 py-2 text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 active:scale-95"
           >
             <FaVial size={13} className="text-purple-200" />
-            <span className="hidden sm:inline">Tester Center</span>
-            <span className="sm:hidden">Tests</span>
+            <span className="hidden sm:inline">Verification Suite</span>
+            <span className="sm:hidden">Suite</span>
           </button>
 
           {/* Ingest Logs Modal Trigger */}

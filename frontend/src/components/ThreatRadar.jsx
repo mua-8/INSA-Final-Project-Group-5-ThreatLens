@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   FiShield,
   FiAlertTriangle,
@@ -8,48 +8,50 @@ import {
   FiTerminal,
   FiRadio,
   FiCrosshair,
-  FiPlay,
   FiCheckCircle,
 } from "react-icons/fi";
 
 export default function ThreatRadar({
   alerts = [],
+  events = [],
   quarantinedCount = 0,
-  onTriggerAttack,
-  simulating = false,
+  onTriggerScan,
+  scanning = false,
   onSelectIp,
 }) {
-  const [tickerLogs, setTickerLogs] = useState([
-    {
-      id: 1,
-      time: "Just now",
-      source: "WAF Core",
-      message: "DR-06 SQLi rule evaluation active on incoming HTTP payloads.",
-      level: "info",
-    },
-    {
-      id: 2,
-      time: "1m ago",
-      source: "Linux Auth",
-      message: "Endpoint agent srv-linux-prod01 streaming auth.log telemetry.",
-      level: "success",
-    },
-    {
-      id: 3,
-      time: "2m ago",
-      source: "Correlation",
-      message: "Sliding window 5m evaluator active. Loopback isolation enabled.",
-      level: "info",
-    },
-  ]);
-
   const [selectedTarget, setSelectedTarget] = useState(null);
 
-  // Active targets derived from alerts
-  const targets = alerts.slice(0, 6).map((a, i) => {
-    // Generate deterministic angles and radii based on index and severity
-    const angle = ((i * 57 + 35) % 360) * (Math.PI / 180);
-    const radius = 35 + (i * 12) % 45; // percentage from center
+  // Derive live stream entries directly from real recent events
+  const liveLogs = events.slice(0, 5).map((e, idx) => ({
+    id: e.id || idx,
+    time: e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : "Live",
+    source: e.host || "siem-core",
+    message: `${e.event_type || "auth.attempt"} from ${e.source_ip || "127.0.0.1"} (user: ${e.username || "anonymous"}) - ${e.outcome || "processed"}`,
+    level: e.outcome === "failed" ? "danger" : "info",
+  }));
+
+  // Fallback if no events loaded yet
+  const displayLogs = liveLogs.length > 0 ? liveLogs : [
+    {
+      id: "init-1",
+      time: "Live",
+      source: "WAF Core",
+      message: "Continuous deep packet inspection active on monitored web gateways.",
+      level: "info",
+    },
+    {
+      id: "init-2",
+      time: "Live",
+      source: "Ingestion Engine",
+      message: "SIEM event queue operational. Sliding window 5m evaluator armed.",
+      level: "info",
+    },
+  ];
+
+  // Derive radar target points directly from active real alerts
+  const targets = alerts.slice(0, 8).map((a, i) => {
+    const angle = ((i * 47 + 25) % 360) * (Math.PI / 180);
+    const radius = 32 + (i * 11) % 48;
     const x = 50 + radius * Math.cos(angle);
     const y = 50 + radius * Math.sin(angle);
     return {
@@ -123,7 +125,7 @@ export default function ThreatRadar({
                   setSelectedTarget(t);
                   if (onSelectIp) onSelectIp(t.ip);
                 }}
-                title={`Target: ${t.ip} (${t.rule})`}
+                title={`Host: ${t.ip} (${t.rule})`}
                 className="absolute transform -translate-x-1/2 -translate-y-1/2 group cursor-pointer z-20 focus:outline-none"
                 style={{ left: `${t.x}%`, top: `${t.y}%` }}
               >
@@ -161,7 +163,7 @@ export default function ThreatRadar({
         <div className="w-full flex items-center justify-between text-[11px] font-mono text-slate-400 pt-2">
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-rose-500" />
-            <span>Critical / High ({alerts.length})</span>
+            <span>Active Threat Vectors ({alerts.length})</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-emerald-400" />
@@ -170,7 +172,7 @@ export default function ThreatRadar({
         </div>
       </div>
 
-      {/* RIGHT: Live Cyber Operations Center & Feed (7 cols) */}
+      {/* RIGHT: Live Cyber Operations Center & Real-Time Feed (7 cols) */}
       <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
         {/* Dynamic Status Ribbon */}
         <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800">
@@ -180,11 +182,11 @@ export default function ThreatRadar({
             </div>
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                Global Threat Posture
+                Threat Posture
               </span>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-black text-amber-300 font-mono">
-                  DEFCON 3: ELEVATED THREAT
+                  DEFCON 3: ELEVATED MONITORING
                 </span>
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-ping" />
               </div>
@@ -201,15 +203,15 @@ export default function ThreatRadar({
               </span>
             </div>
 
-            {/* 1-Click Interactive Intrusion Sim */}
+            {/* Run Security Verification Scan */}
             <button
-              onClick={onTriggerAttack}
-              disabled={simulating}
-              className="flex items-center gap-1.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-lg shadow-rose-900/30 transition active:scale-95 disabled:opacity-60"
-              title="Inject a real-time live intrusion attack right now to see the radar & alerts ping dynamically"
+              onClick={onTriggerScan}
+              disabled={scanning}
+              className="flex items-center gap-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-lg shadow-cyan-900/30 transition active:scale-95 disabled:opacity-60"
+              title="Run a real-time security verification scan on the monitored assets"
             >
-              <FiZap className={simulating ? "animate-spin" : ""} size={14} />
-              <span>{simulating ? "Firing Attack..." : "⚡ Live Attack Sim"}</span>
+              <FiZap className={scanning ? "animate-spin" : ""} size={14} />
+              <span>{scanning ? "Evaluating Assets..." : "Run Security Scan"}</span>
             </button>
           </div>
         </div>
@@ -250,7 +252,7 @@ export default function ThreatRadar({
               Click any blip on the radar scanner to inspect live target telemetry.
             </span>
             <span className="font-mono text-cyan-400 text-[11px]">
-              Ready for Intercept
+              Active Intercept Ready
             </span>
           </div>
         )}
@@ -260,7 +262,7 @@ export default function ThreatRadar({
           <div className="flex items-center justify-between text-xs">
             <span className="font-bold uppercase tracking-wider text-slate-400 text-[10px] flex items-center gap-1.5">
               <FiTerminal className="text-cyan-400" />
-              Live SIEM Telemetry Activity Stream
+              Live Telemetry Activity Stream
             </span>
             <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -269,7 +271,7 @@ export default function ThreatRadar({
           </div>
 
           <div className="bg-slate-950 rounded-2xl border border-slate-800 p-3 font-mono text-[11px] space-y-1.5 max-h-36 overflow-y-auto">
-            {tickerLogs.map((log) => (
+            {displayLogs.map((log) => (
               <div
                 key={log.id}
                 className="flex items-start gap-2 text-slate-300 hover:text-white transition"

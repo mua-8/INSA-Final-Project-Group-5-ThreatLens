@@ -5,21 +5,14 @@ import {
   FiLock,
   FiUser,
   FiSearch,
-  FiZap,
   FiCheckCircle,
   FiRefreshCw,
   FiArrowRight,
-  FiDatabase,
   FiDollarSign,
   FiCreditCard,
-  FiSend,
   FiEye,
   FiEyeOff,
   FiChevronRight,
-  FiExternalLink,
-  FiSliders,
-  FiX,
-  FiTerminal,
   FiKey
 } from "react-icons/fi";
 import {
@@ -28,12 +21,6 @@ import {
   submitVictimSearch,
   resetVictimIp
 } from "../services/api.js";
-
-const DEFAULT_ATTACK_IPS = [
-  { label: "External Threat Actor (APT-41)", ip: "198.51.100.42" },
-  { label: "Compromised Tor Exit Node", ip: "203.0.113.19" },
-  { label: "Rogue Insider Workstation", ip: "192.168.1.105" },
-];
 
 const INITIAL_TRANSACTIONS = [
   {
@@ -75,19 +62,15 @@ const INITIAL_TRANSACTIONS = [
 ];
 
 export default function VictimWebsite({ onSwitchToAdmin }) {
-  const [selectedIp, setSelectedIp] = useState("198.51.100.42");
-  const [customIp, setCustomIp] = useState("");
+  const [activeIp] = useState("198.51.100.42");
   const [isQuarantined, setIsQuarantined] = useState(false);
   const [quarantineInfo, setQuarantineInfo] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Red Team Audit drawer state
-  const [showAuditDrawer, setShowAuditDrawer] = useState(true);
-
   // Customer portal interactive state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showBalance, setShowBalance] = useState(true);
-  const [transactions, setTransactions] = useState(INITIAL_TRANSACTIONS);
+  const [transactions] = useState(INITIAL_TRANSACTIONS);
 
   // Login form state
   const [loginUsername, setLoginUsername] = useState("");
@@ -99,9 +82,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
   const [searchResults, setSearchResults] = useState(null);
   const [searchResponse, setSearchResponse] = useState(null);
 
-  const activeIp = customIp.trim() || selectedIp;
-
-  // Fetch status of the current active IP
+  // Fetch status of the current client IP from WAF
   const checkStatus = async () => {
     try {
       const res = await getVictimStatus(activeIp);
@@ -117,19 +98,18 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
   }, [activeIp]);
 
   // Handle Login submission
-  const handleLogin = async (e, forcedUsername = null, forcedPassword = null, forcedCount = 1) => {
+  const handleLogin = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
-    const u = forcedUsername !== null ? forcedUsername : loginUsername;
-    const p = forcedPassword !== null ? forcedPassword : loginPassword;
+    if (!loginUsername.trim()) return;
 
     setLoading(true);
     setLoginResponse(null);
     try {
       const res = await submitVictimLogin({
-        username: u,
-        password: p,
+        username: loginUsername,
+        password: loginPassword,
         client_ip: activeIp,
-        simulate_count: forcedCount
+        simulate_count: 1
       });
       setLoginResponse(res);
       await checkStatus();
@@ -139,7 +119,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
       }
     } catch (err) {
       setLoginResponse({
-        error: err.message || "Request failed",
+        error: err.message || "Authentication gateway unavailable.",
         status: "error"
       });
     } finally {
@@ -148,16 +128,16 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
   };
 
   // Handle Search submission
-  const handleSearch = async (e, forcedQuery = null) => {
+  const handleSearch = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
-    const q = forcedQuery !== null ? forcedQuery : searchQuery;
+    if (!searchQuery.trim()) return;
 
     setLoading(true);
     setSearchResponse(null);
     setSearchResults(null);
     try {
       const res = await submitVictimSearch({
-        query: q,
+        query: searchQuery,
         client_ip: activeIp
       });
       setSearchResponse(res);
@@ -167,7 +147,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
       await checkStatus();
     } catch (err) {
       setSearchResponse({
-        error: err.message || "Search request failed",
+        error: err.message || "Query failed.",
         status: "error"
       });
     } finally {
@@ -204,21 +184,13 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
         </div>
         
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowAuditDrawer(!showAuditDrawer)}
-            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 font-semibold transition"
-          >
-            <FiSliders className="text-xs" />
-            <span>Red Team Exploit Harness:</span>
-            <span className={`h-1.5 w-1.5 rounded-full ${showAuditDrawer ? "bg-cyan-400 animate-ping" : "bg-slate-500"}`} />
-            <span className="font-mono">{showAuditDrawer ? "OPEN" : "HIDDEN"}</span>
-          </button>
-
+          <span className="text-slate-400">Federal Reserve ABA Routing: <strong className="text-slate-200">021000021</strong></span>
+          <span className="text-slate-600">|</span>
           <button
             onClick={onSwitchToAdmin}
-            className="flex items-center gap-1 font-bold text-sky-400 hover:text-sky-300 transition"
+            className="flex items-center gap-1 font-semibold text-cyan-400 hover:text-cyan-300 transition"
           >
-            <span>Admin SOC Portal</span>
+            <span>SOC Security Gateway</span>
             <FiArrowRight className="text-xs" />
           </button>
         </div>
@@ -250,15 +222,15 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
             <a href="#accounts" className="hover:text-amber-400 transition">Cash & Treasury</a>
             <a href="#wires" className="hover:text-amber-400 transition">Global Wire Services</a>
             <a href="#custody" className="hover:text-amber-400 transition">Asset Custody</a>
-            <a href="#compliance" className="hover:text-amber-400 transition">Compliance & Security</a>
+            <a href="#compliance" className="hover:text-amber-400 transition">Compliance & Disclosures</a>
           </nav>
 
           <div className="flex items-center gap-3">
             {isAuthenticated ? (
               <div className="flex items-center gap-2 bg-slate-800/80 border border-slate-700 px-3 py-1.5 rounded-lg text-xs">
                 <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-slate-300 font-medium">Logged in as:</span>
-                <span className="font-mono font-bold text-amber-300">{loginUsername || "Corporate Lead"}</span>
+                <span className="text-slate-300 font-medium">Account:</span>
+                <span className="font-mono font-bold text-amber-300">{loginUsername || "Corporate Officer"}</span>
                 <button
                   onClick={() => setIsAuthenticated(false)}
                   className="ml-2 text-slate-400 hover:text-white underline text-[11px]"
@@ -282,7 +254,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
       {/* Main Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
 
-        {/* 403 Forbidden Shield Screen if Attacking IP is Quarantined */}
+        {/* 403 Forbidden Shield Screen if Host IP is Quarantined by WAF */}
         {isQuarantined && (
           <div className="rounded-2xl border-2 border-red-500 bg-gradient-to-br from-red-950/90 via-slate-900 to-red-950/80 p-6 sm:p-8 shadow-2xl shadow-red-950/90 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 pb-6 border-b border-red-500/30">
@@ -296,7 +268,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                       HTTP 403 FORBIDDEN
                     </span>
                     <span className="text-xs text-red-300 font-semibold tracking-wide">
-                      ThreatLens Active Defense WAF
+                      Apex Security Shield • Web Application Firewall
                     </span>
                   </div>
                   <h2 className="text-2xl font-black text-white mt-1 tracking-tight">
@@ -314,7 +286,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                   className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-lg shadow-red-600/30 transition active:scale-95"
                 >
                   <FiShield size={14} />
-                  <span>Inspect in Admin SOC Portal</span>
+                  <span>Inspect in SOC Security Operations</span>
                 </button>
                 <button
                   onClick={handleResetIp}
@@ -322,35 +294,35 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                   className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold px-4 py-2.5 rounded-xl border border-slate-700 text-xs transition active:scale-95"
                 >
                   <FiRefreshCw className={loading ? "animate-spin" : ""} size={14} />
-                  <span>Clear IP Quarantine</span>
+                  <span>Request Firewall Unblock</span>
                 </button>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-6 text-xs font-mono">
               <div className="bg-slate-950/80 p-3 rounded-xl border border-red-900/50">
-                <span className="text-slate-400 block text-[10px] uppercase">Quarantined IP:</span>
+                <span className="text-slate-400 block text-[10px] uppercase">Client Origin:</span>
                 <span className="text-cyan-400 font-bold text-sm">{activeIp}</span>
               </div>
               <div className="bg-slate-950/80 p-3 rounded-xl border border-red-900/50">
-                <span className="text-slate-400 block text-[10px] uppercase">Triggered Security Rule:</span>
+                <span className="text-slate-400 block text-[10px] uppercase">Firewall Rule Violation:</span>
                 <span className="text-amber-400 font-bold text-sm">
-                  {quarantineInfo?.rule_id || "DR-06 / SQL Injection Attack"}
+                  {quarantineInfo?.rule_id || "DR-06 / SQL Injection Exploit"}
                 </span>
               </div>
               <div className="bg-slate-950/80 p-3 rounded-xl border border-red-900/50">
-                <span className="text-slate-400 block text-[10px] uppercase">Automated SOC Action:</span>
-                <span className="text-emerald-400 font-bold text-sm">DROP Connection / WAF Shield</span>
+                <span className="text-slate-400 block text-[10px] uppercase">WAF Disposition:</span>
+                <span className="text-emerald-400 font-bold text-sm">CONNECTION DROPPED</span>
               </div>
               <div className="bg-slate-950/80 p-3 rounded-xl border border-red-900/50">
-                <span className="text-slate-400 block text-[10px] uppercase">Ray Incident ID:</span>
-                <span className="text-slate-300 font-bold text-sm">THREAT-WAF-{Math.abs(activeIp.split('.').reduce((a,b)=>a*31+parseInt(b), 0)).toString(16).toUpperCase()}</span>
+                <span className="text-slate-400 block text-[10px] uppercase">Incident Ray ID:</span>
+                <span className="text-slate-300 font-bold text-sm">WAF-RAY-9908F41A</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Hero Banner: Institutional Banking */}
+        {/* Hero Section */}
         <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-gradient-to-r from-slate-900 via-slate-900/95 to-slate-950 p-8 sm:p-10 shadow-2xl">
           <div className="absolute right-0 top-0 -mt-12 -mr-12 h-96 w-96 rounded-full bg-amber-500/5 blur-3xl pointer-events-none" />
           <div className="relative z-10 max-w-3xl space-y-4">
@@ -362,14 +334,14 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
               Institutional Asset Management for High-Growth Enterprises
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Apex Federal provides frictionless commercial treasury, automated wire clearances, and programmatic liquidity. Backed by real-time ThreatLens active intrusion defense.
+              Apex Federal provides frictionless commercial treasury, automated wire clearances, and programmatic liquidity. Backed by real-time automated intrusion defense.
             </p>
             <div className="flex flex-wrap items-center gap-4 pt-2">
               <a
                 href="#login-section"
                 className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-amber-500/25 transition hover:bg-amber-400 active:scale-95"
               >
-                <span>Launch Client Sign-In</span>
+                <span>Client Sign-In</span>
                 <FiChevronRight />
               </a>
               <a
@@ -443,10 +415,10 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
           </div>
         </section>
 
-        {/* Live Attack Surface Area: Interactive Customer Login & Wire Lookup */}
+        {/* Live Authentication & Transaction Search */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-          {/* Surface 1: Real Customer Authentication Gateway */}
+          {/* Real Customer Authentication Gateway */}
           <section id="login-section" className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-xl flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
@@ -457,12 +429,12 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                   </h3>
                 </div>
                 <span className="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded border border-slate-700">
-                  Target Endpoint: POST /api/victim/login
+                  Protected by Active WAF
                 </span>
               </div>
 
               <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                Sign into your Apex Federal commercial account. Real-time active defense monitors this gateway for SQL injection auth bypass, brute force, and credential stuffing.
+                Sign into your Apex Federal commercial account. Secure multi-factor session validation is enforced.
               </p>
 
               {/* Real Login Form */}
@@ -477,7 +449,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                       type="text"
                       value={loginUsername}
                       onChange={(e) => setLoginUsername(e.target.value)}
-                      placeholder="e.g. corporate_lead or admin' OR '1'='1"
+                      placeholder="corporate_treasury_lead"
                       className="w-full bg-slate-950 text-white pl-10 pr-4 py-2 rounded-xl border border-slate-700 font-mono text-xs focus:border-amber-400 focus:outline-none transition shadow-inner"
                     />
                   </div>
@@ -504,7 +476,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                     <input type="checkbox" defaultChecked className="rounded bg-slate-950 border-slate-700 text-amber-500" />
                     <span>Remember Client Device</span>
                   </label>
-                  <span className="text-slate-500 text-[11px]">Forgot Credentials?</span>
+                  <span className="text-slate-500 text-[11px] cursor-pointer hover:underline">Forgot Credentials?</span>
                 </div>
 
                 <button
@@ -529,25 +501,17 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                   <div className="bg-red-950/70 border border-red-700/70 rounded-xl p-3.5 text-xs space-y-2">
                     <div className="flex items-center gap-2 text-red-300 font-bold">
                       <FiAlertTriangle className="text-red-400 text-base" />
-                      <span>ThreatLens Active Defense Intercepted Intrusion!</span>
+                      <span>Security Violation Intercepted by WAF</span>
                     </div>
                     <p className="text-slate-200 font-mono text-[11px]">
                       {loginResponse.message || loginResponse.error}
                     </p>
-                    {loginResponse.alert && (
-                      <div className="bg-slate-950/90 p-2.5 rounded-lg border border-red-900/50 text-[11px] font-mono text-amber-300 flex items-center justify-between">
-                        <span><strong>Rule:</strong> {loginResponse.alert.rule_name}</span>
-                        <span className="bg-red-900/80 text-white px-2 py-0.5 rounded text-[10px] font-bold">
-                          {loginResponse.alert.severity}
-                        </span>
-                      </div>
-                    )}
                     <button
                       onClick={onSwitchToAdmin}
                       className="inline-flex items-center gap-1.5 text-xs text-cyan-400 hover:underline font-bold mt-1"
                     >
                       <FiShield size={12} />
-                      <span>View Defense Action & Mitigation in SOC Portal</span>
+                      <span>Review Security Disposition in SOC Portal</span>
                     </button>
                   </div>
                 ) : (
@@ -562,23 +526,23 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
             )}
           </section>
 
-          {/* Surface 2: Wire Ledger & Transaction Search API */}
+          {/* Wire Ledger & Transaction Search API */}
           <section id="wire-search-section" className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-xl flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
                 <div className="flex items-center gap-2">
                   <FiSearch className="text-cyan-400 text-lg" />
                   <h3 className="font-bold text-white text-sm">
-                    Wire Transfer & Transaction Lookup API
+                    Wire Transfer & Transaction Lookup
                   </h3>
                 </div>
                 <span className="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded border border-slate-700">
-                  Target Endpoint: POST /api/victim/search
+                  Fedwire Query API
                 </span>
               </div>
 
               <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                Query enterprise wire batches, settlement IDs, or counterparties. This search input queries the underlying database and is defended against SQL injection fuzzer queries.
+                Query enterprise wire batches, settlement IDs, or counterparties across the clearing network.
               </p>
 
               {/* Search Form */}
@@ -593,7 +557,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="e.g. Amazon or ' UNION SELECT username, password FROM users--"
+                      placeholder="e.g. Amazon or Sovereign Liquidity"
                       className="w-full bg-slate-950 text-white pl-10 pr-4 py-2 rounded-xl border border-slate-700 font-mono text-xs focus:border-cyan-400 focus:outline-none transition shadow-inner"
                     />
                   </div>
@@ -614,14 +578,14 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
               </form>
             </div>
 
-            {/* Search Results / Attack Response Container */}
+            {/* Search Results */}
             {searchResponse && (
               <div className="mt-4 pt-3 border-t border-slate-800">
                 {searchResponse.status === "attack_detected" || searchResponse.blocked ? (
                   <div className="bg-red-950/70 border border-red-700/70 rounded-xl p-3.5 text-xs space-y-2">
                     <div className="flex items-center gap-2 text-red-300 font-bold">
                       <FiAlertTriangle className="text-red-400 text-base" />
-                      <span>SQL Injection Attack Blocked by WAF!</span>
+                      <span>Security Violation Intercepted by WAF</span>
                     </div>
                     <p className="text-slate-200 font-mono text-[11px]">
                       {searchResponse.message}
@@ -631,7 +595,7 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
                       className="inline-flex items-center gap-1.5 text-xs text-cyan-400 hover:underline font-bold mt-1"
                     >
                       <FiShield size={12} />
-                      <span>Review SQLi Attack Vector in SOC Dashboard</span>
+                      <span>Review Incident in SOC Dashboard</span>
                     </button>
                   </div>
                 ) : (
@@ -711,127 +675,6 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
         </section>
       </main>
 
-      {/* Floating Red Team Security Penetration Drawer / Dock */}
-      {showAuditDrawer && (
-        <aside className="fixed bottom-6 right-6 z-40 w-96 max-w-[calc(100vw-2rem)] rounded-2xl border border-cyan-500/40 bg-slate-900/95 p-5 shadow-2xl shadow-cyan-950/80 backdrop-blur-xl animate-in slide-in-from-bottom-5">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
-              </span>
-              <h4 className="text-xs font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
-                <FiTerminal size={14} /> Red Team Exploit Harness
-              </h4>
-            </div>
-            <button
-              onClick={() => setShowAuditDrawer(false)}
-              className="text-slate-400 hover:text-white transition"
-              title="Minimize exploit harness"
-            >
-              <FiX size={16} />
-            </button>
-          </div>
-
-          <p className="text-[11px] text-slate-300 mb-3 leading-normal">
-            Inject real-world attack vectors into Apex Federal Bank to test <strong>ThreatLens automated prevention</strong> and <strong>real-time quarantine</strong>.
-          </p>
-
-          {/* Attacker IP Persona Selector */}
-          <div className="space-y-1.5 mb-3 text-xs">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-              Attacker IP Persona:
-            </label>
-            <select
-              value={selectedIp}
-              onChange={(e) => {
-                setSelectedIp(e.target.value);
-                setCustomIp("");
-              }}
-              className="w-full bg-slate-950 text-cyan-300 font-mono text-xs rounded-lg border border-slate-700 px-2.5 py-1.5 outline-none focus:border-cyan-500"
-            >
-              {DEFAULT_ATTACK_IPS.map((item) => (
-                <option key={item.ip} value={item.ip}>
-                  {item.ip} ({item.label})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* 1-Click Exploit Buttons */}
-          <div className="space-y-2 text-xs">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-              Quick Exploit Presets (1-Click Inject):
-            </label>
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={(e) => {
-                  setLoginUsername("admin' OR '1'='1");
-                  setLoginPassword("any_password");
-                  handleLogin(e, "admin' OR '1'='1", "any_password");
-                }}
-                className="text-[11px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono p-2 rounded-lg text-left transition font-semibold"
-              >
-                ⚡ SQLi: ' OR '1'='1
-              </button>
-
-              <button
-                type="button"
-                onClick={(e) => {
-                  setLoginUsername("admin'--");
-                  setLoginPassword("ignored");
-                  handleLogin(e, "admin'--", "ignored");
-                }}
-                className="text-[11px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono p-2 rounded-lg text-left transition font-semibold"
-              >
-                ⚡ SQLi: admin'--
-              </button>
-
-              <button
-                type="button"
-                onClick={(e) => {
-                  setLoginUsername("finance_lead");
-                  setLoginPassword("badpass");
-                  handleLogin(e, "finance_lead", "badpass", 5);
-                }}
-                className="text-[11px] bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 font-mono p-2 rounded-lg text-left transition font-semibold"
-              >
-                ⚡ Brute Force (x5)
-              </button>
-
-              <button
-                type="button"
-                onClick={(e) => {
-                  setSearchQuery("' UNION SELECT username, password FROM users--");
-                  handleSearch(e, "' UNION SELECT username, password FROM users--");
-                }}
-                className="text-[11px] bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono p-2 rounded-lg text-left transition font-semibold"
-              >
-                ⚡ Wire SQLi Injection
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-800 text-xs">
-            <button
-              onClick={handleResetIp}
-              disabled={loading}
-              className="text-slate-400 hover:text-white underline text-[11px] flex items-center gap-1"
-            >
-              <FiRefreshCw className={loading ? "animate-spin" : ""} size={10} />
-              Reset Attacker IP
-            </button>
-            <button
-              onClick={onSwitchToAdmin}
-              className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 py-1 rounded-lg text-[11px] shadow transition"
-            >
-              Go to SOC Portal →
-            </button>
-          </div>
-        </aside>
-      )}
-
       {/* Institutional Footer */}
       <footer className="bg-slate-950 border-t border-slate-800/80 px-6 py-6 text-xs text-slate-500">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -842,9 +685,15 @@ export default function VictimWebsite({ onSwitchToAdmin }) {
             <span>•</span>
             <span>Equal Housing Lender</span>
           </div>
-          <div className="text-[11px] text-slate-400 flex items-center gap-2">
-            <span>ThreatLens Active Defense Monitoring Active</span>
+          <div className="text-[11px] text-slate-400 flex items-center gap-3">
+            <span>Automated Active Defense Protected</span>
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            <button
+              onClick={onSwitchToAdmin}
+              className="text-slate-400 hover:text-white underline"
+            >
+              Security Operations Console
+            </button>
           </div>
         </div>
       </footer>

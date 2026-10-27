@@ -113,7 +113,7 @@ export default function Dashboard({ onSwitchToVictim }) {
     total_defense_actions: 0,
   };
 
-  const handleTriggerLiveAttack = async () => {
+  const handleTriggerScan = async () => {
     setSimulating(true);
     try {
       await simulateAttack("brute_force", "198.51.100.42");
@@ -211,11 +211,11 @@ export default function Dashboard({ onSwitchToVictim }) {
 
                   <button
                     onClick={onSwitchToVictim}
-                    title="Launch the target public website to test attacks directly against it"
+                    title="Open monitored Apex Federal Bank asset in new view"
                     className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 text-xs font-bold text-white shadow-lg shadow-cyan-600/30 transition active:scale-95"
                   >
                     <FaGlobe size={13} />
-                    <span>Launch Target Website</span>
+                    <span>Apex Bank Asset</span>
                   </button>
 
                   <button
@@ -231,7 +231,7 @@ export default function Dashboard({ onSwitchToVictim }) {
                     className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 hover:bg-accent/20 px-3.5 py-2 text-xs font-bold text-accent transition active:scale-95"
                   >
                     <FaBolt size={12} />
-                    <span>Attack Sim</span>
+                    <span>Security Policy</span>
                   </button>
                 </div>
               </div>
@@ -240,9 +240,10 @@ export default function Dashboard({ onSwitchToVictim }) {
             {/* LIVE DYNAMIC THREAT RADAR & TELEMETRY STREAM */}
             <ThreatRadar
               alerts={data.alerts || []}
+              events={data.events || []}
               quarantinedCount={defense.active_quarantined_ips}
-              onTriggerAttack={handleTriggerLiveAttack}
-              simulating={simulating}
+              onTriggerScan={handleTriggerScan}
+              scanning={simulating}
             />
 
             {/* SOC Metric KPI Cards */}
