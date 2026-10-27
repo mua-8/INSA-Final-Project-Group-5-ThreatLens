@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import {
   FaListUl,
@@ -11,6 +10,9 @@ import {
   FaBan,
   FaBolt,
   FaGlobe,
+  FaDesktop,
+  FaLayerGroup,
+  FaChartPie,
 } from "react-icons/fa";
 import Header from "../components/Header.jsx";
 import StatCard, { StatCardSkeleton } from "../components/StatCard.jsx";
@@ -32,7 +34,7 @@ function LoadingState() {
     <div className="space-y-6" aria-busy="true">
       <div className="flex items-center gap-3 text-sm text-slate-400">
         <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-accent" />
-        Connecting to ThreatLens API...
+        Connecting to ThreatLens SIEM Backend...
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -54,25 +56,25 @@ function ErrorState({ message, onRetry, retrying }) {
   return (
     <div
       role="alert"
-      className="mx-auto mt-16 max-w-lg rounded-xl border border-danger/40 bg-card p-8 text-center shadow-lg"
+      className="mx-auto mt-16 max-w-lg rounded-2xl border border-danger/40 bg-slate-900/90 p-8 text-center shadow-2xl backdrop-blur-md"
     >
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger/15 text-danger">
-        <FaPlug size={20} />
+      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-danger/15 text-danger ring-1 ring-danger/40 shadow-lg shadow-danger/10">
+        <FaPlug size={24} />
       </div>
 
-      <h2 className="text-lg font-semibold text-white">
-        API connection failed
+      <h2 className="text-xl font-bold text-white tracking-tight">
+        SIEM API Connection Disrupted
       </h2>
 
-      <p className="mt-2 text-sm text-slate-400">{message}</p>
+      <p className="mt-2 text-xs text-slate-400 leading-relaxed">{message}</p>
 
       <button
         onClick={onRetry}
         disabled={retrying}
-        className="mt-6 inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-primary transition hover:bg-sky-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:opacity-60"
+        className="mt-6 inline-flex items-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-xs font-bold text-primary transition hover:bg-sky-300 focus:outline-none disabled:opacity-60 shadow-lg shadow-accent/20"
       >
         <FaRedo className={retrying ? "animate-spin" : ""} size={12} />
-        {retrying ? "Retrying..." : "Retry connection"}
+        {retrying ? "Reconnecting..." : "Retry Connection"}
       </button>
     </div>
   );
@@ -91,6 +93,9 @@ export default function Dashboard({ onSwitchToVictim }) {
     retry,
   } = useDashboardData();
 
+  // Active SOC tab view
+  const [activeTab, setActiveTab] = useState("all");
+
   // Interactive modal states
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -106,7 +111,7 @@ export default function Dashboard({ onSwitchToVictim }) {
   };
 
   return (
-    <div className="min-h-screen bg-primary pb-16">
+    <div className="min-h-screen bg-slate-950 pb-20 selection:bg-cyan-500 selection:text-black">
       <Header
         lastUpdated={lastUpdated}
         refreshing={refreshing}
@@ -137,152 +142,225 @@ export default function Dashboard({ onSwitchToVictim }) {
             {error && (
               <div
                 role="alert"
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-xs text-warning shadow-lg backdrop-blur-md"
               >
                 <span>
-                  Connection lost. Showing the last data received. Retrying
-                  every 15 seconds.
+                  Connection lost to telemetry ingestion daemon. Showing cached database snapshots. Retrying automatically.
                 </span>
                 <button
                   onClick={retry}
-                  className="font-semibold underline underline-offset-2"
+                  className="font-bold underline underline-offset-2 hover:text-white"
                 >
-                  Retry now
+                  Retry Now
                 </button>
               </div>
             )}
 
-            {/* Active Defense & Live Auto-Prevention Status Banner */}
-            <div className="rounded-2xl border border-emerald-500/40 bg-gradient-to-r from-slate-900 via-slate-900/95 to-emerald-950/40 p-4 shadow-xl backdrop-blur-md">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3.5">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/40 shadow-lg shadow-emerald-500/10">
-                    <FaShieldAlt size={22} />
+            {/* Active Defense & Live Auto-Prevention Operations Banner */}
+            <section className="relative overflow-hidden rounded-2xl border border-emerald-500/40 bg-gradient-to-r from-slate-900 via-slate-900/95 to-emerald-950/40 p-5 shadow-2xl backdrop-blur-md">
+              <div className="absolute right-0 top-0 -mt-10 -mr-10 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
+              
+              <div className="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5">
+                <div className="flex items-start sm:items-center gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/40 shadow-lg shadow-emerald-500/20 shrink-0">
+                    <FaShieldAlt size={24} />
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-bold text-white tracking-wide">
-                        Automated Threat Prevention & Active Defense
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <h2 className="text-base font-extrabold text-white tracking-tight">
+                        Active Threat Prevention & Automated Intrusion Quarantine
                       </h2>
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider ${
                         defense.auto_defense_enabled
-                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                          : "bg-warning/20 text-warning border border-warning/30"
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                          : "bg-warning/20 text-warning border border-warning/40"
                       }`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${defense.auto_defense_enabled ? "bg-emerald-400 animate-pulse" : "bg-warning"}`} />
-                        {defense.auto_defense_enabled ? "Auto-Prevention Active" : "Monitoring Only"}
+                        <span className={`h-2 w-2 rounded-full ${defense.auto_defense_enabled ? "bg-emerald-400 animate-pulse" : "bg-warning"}`} />
+                        {defense.auto_defense_enabled ? "Auto-Prevention Armed" : "Monitoring Only"}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-300 mt-0.5">
-                      Identifies SSH brute force, SQL injection, spraying, and account breaches in real time. Automatically quarantines attacker IPs and recommends SOC remediation.
+                    <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                      Continuous real-time correlation against SSH brute force (DR-01), password spraying (DR-04), unauthorized root logins (DR-03), and Web SQL injection (DR-06). Malicious client IPs are automatically quarantined with a 403 WAF shield.
                     </p>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <div className="flex items-center gap-2 rounded-lg bg-slate-800/80 px-3 py-1.5 border border-slate-700 text-xs">
-                    <FaBan className="text-danger" size={12} />
-                    <span className="text-slate-400">Quarantined IPs:</span>
-                    <span className="font-mono font-bold text-white">{defense.active_quarantined_ips}</span>
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0 w-full lg:w-auto justify-start lg:justify-end">
+                  <div className="flex items-center gap-2 rounded-xl bg-slate-950/80 px-3.5 py-2 border border-slate-700/80 text-xs">
+                    <FaBan className="text-rose-500" size={13} />
+                    <span className="text-slate-400">Quarantined Hosts:</span>
+                    <span className="font-mono font-black text-rose-400 text-sm">
+                      {defense.active_quarantined_ips}
+                    </span>
                   </div>
 
                   <button
                     onClick={onSwitchToVictim}
-                    title="Launch the target public website to test attacks directly on it"
-                    className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-md shadow-cyan-600/25 transition active:scale-95"
+                    title="Launch the target public website to test attacks directly against it"
+                    className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 text-xs font-bold text-white shadow-lg shadow-cyan-600/30 transition active:scale-95"
                   >
-                    <FaGlobe size={12} />
+                    <FaGlobe size={13} />
                     <span>Launch Target Website</span>
                   </button>
 
                   <button
                     onClick={() => setShowDefenseCenter(true)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-md shadow-emerald-600/25 transition active:scale-95"
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-600/30 transition active:scale-95"
                   >
-                    <FaShieldAlt size={12} />
+                    <FaShieldAlt size={13} />
                     <span>Defense Center</span>
                   </button>
 
                   <button
-                    onClick={() => {
-                      setShowDefenseCenter(true);
-                    }}
-                    className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 hover:bg-accent/20 px-3 py-1.5 text-xs font-bold text-accent transition active:scale-95"
+                    onClick={() => setShowDefenseCenter(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 hover:bg-accent/20 px-3.5 py-2 text-xs font-bold text-accent transition active:scale-95"
                   >
                     <FaBolt size={12} />
-                    <span>⚡ Attack Sim</span>
+                    <span>Attack Sim</span>
                   </button>
                 </div>
               </div>
-            </div>
+            </section>
 
-            {/* Dashboard statistics */}
+            {/* SOC Metric KPI Cards */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard
-                label="Total Events"
+                label="Total Telemetry Events"
                 value={data.summary.totalEvents}
                 icon={FaListUl}
                 tone="accent"
               />
               <StatCard
-                label="Total Alerts"
+                label="Correlated Security Alerts"
                 value={data.summary.totalAlerts}
                 icon={FaBell}
                 tone="warning"
               />
               <StatCard
-                label="High Severity Alerts"
+                label="High / Critical Severity"
                 value={data.summary.highSeverity}
                 icon={FaExclamationTriangle}
                 tone="danger"
               />
               <StatCard
-                label="Unique Source IPs"
+                label="Unique Threat Actor IPs"
                 value={data.summary.uniqueIps}
                 icon={FaNetworkWired}
                 tone="success"
               />
             </div>
 
-            {/* Analytics and distribution charts */}
-            <Charts
-              severity={data.severity}
-              eventsTimeline={data.eventsTimeline}
-              alertTrend={data.alertTrend}
-              topIps={data.topIps}
-            />
-
-            {/* Existing alerts table */}
-            <AlertsTable
-              alerts={data.alerts}
-              onSelectAlert={(alert) => setSelectedAlert(alert)}
-            />
-
-            {/* Existing SSH authentication events table */}
-            <EventsTable
-              events={data.events}
-              onSelectEvent={(event) => setSelectedEvent(event)}
-            />
-
-            {/* New endpoint agent telemetry table */}
-            {endpointError && (
-              <div
-                role="status"
-                className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
-              >
-                {endpointError} Existing SSH events and alerts are unaffected.
+            {/* SOC Operational View Selector Tabs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-2 pt-2">
+              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+                <button
+                  onClick={() => setActiveTab("all")}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-bold transition ${
+                    activeTab === "all"
+                      ? "bg-slate-800 text-white shadow-sm border border-slate-700"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FaLayerGroup size={12} />
+                  <span>Master Command Board</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab("alerts")}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-bold transition ${
+                    activeTab === "alerts"
+                      ? "bg-slate-800 text-amber-300 shadow-sm border border-slate-700"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FaBell size={12} />
+                  <span>Alert Triage ({data.alerts?.length || 0})</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab("endpoint")}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-bold transition ${
+                    activeTab === "endpoint"
+                      ? "bg-slate-800 text-cyan-300 shadow-sm border border-slate-700"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FaDesktop size={12} />
+                  <span>EDR Endpoint Fleet ({endpointEvents?.length || 0})</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab("events")}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-bold transition ${
+                    activeTab === "events"
+                      ? "bg-slate-800 text-slate-200 shadow-sm border border-slate-700"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FaListUl size={12} />
+                  <span>SSH Event Stream</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab("charts")}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-bold transition ${
+                    activeTab === "charts"
+                      ? "bg-slate-800 text-purple-300 shadow-sm border border-slate-700"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FaChartPie size={12} />
+                  <span>Threat Visualizer</span>
+                </button>
               </div>
+
+              <div className="text-[11px] font-mono text-slate-400">
+                ThreatLens SIEM Engine • Database WAL Mode Enabled
+              </div>
+            </div>
+
+            {/* TAB CONTENT: Master Board or Specific Views */}
+
+            {(activeTab === "all" || activeTab === "charts") && (
+              <Charts
+                severity={data.severity}
+                eventsTimeline={data.eventsTimeline}
+                alertTrend={data.alertTrend}
+                topIps={data.topIps}
+              />
             )}
 
-            <EndpointTelemetryTable
-              events={endpointEvents}
-              loading={endpointLoading}
-            />
+            {(activeTab === "all" || activeTab === "alerts") && (
+              <AlertsTable
+                alerts={data.alerts}
+                onSelectAlert={(alert) => setSelectedAlert(alert)}
+              />
+            )}
+
+            {(activeTab === "all" || activeTab === "endpoint") && (
+              <>
+                {endpointError && (
+                  <div
+                    role="status"
+                    className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-xs text-warning shadow"
+                  >
+                    {endpointError} Existing SSH events and alerts are unaffected.
+                  </div>
+                )}
+                <EndpointTelemetryTable
+                  events={endpointEvents}
+                  loading={endpointLoading}
+                />
+              </>
+            )}
+
+            {(activeTab === "all" || activeTab === "events") && (
+              <EventsTable
+                events={data.events}
+                onSelectEvent={(event) => setSelectedEvent(event)}
+              />
+            )}
           </>
         )}
       </main>
 
-      {/* Existing alert details modal */}
+      {/* Interactive alert details modal */}
       {selectedAlert && (
         <AlertDetailModal
           alert={selectedAlert}
@@ -291,7 +369,7 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
-      {/* Existing SSH event details modal */}
+      {/* Interactive SSH event details modal */}
       {selectedEvent && (
         <EventDetailModal
           event={selectedEvent}
@@ -299,7 +377,7 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
-      {/* Existing log ingestion modal */}
+      {/* Log ingestion modal */}
       {showIngestModal && (
         <IngestModal
           onClose={() => setShowIngestModal(false)}
@@ -307,14 +385,14 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
-      {/* Existing database health modal */}
+      {/* Database health modal */}
       {showDbHealthModal && (
         <DatabaseHealthModal
           onClose={() => setShowDbHealthModal(false)}
         />
       )}
 
-      {/* Existing tester center modal */}
+      {/* Tester center modal */}
       {showTesterCenter && (
         <TesterCenterModal
           onClose={() => setShowTesterCenter(false)}
@@ -322,6 +400,7 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
+      {/* Active defense center modal */}
       {showDefenseCenter && (
         <DefenseCenterModal
           onClose={() => setShowDefenseCenter(false)}
@@ -331,4 +410,3 @@ export default function Dashboard({ onSwitchToVictim }) {
     </div>
   );
 }
-
