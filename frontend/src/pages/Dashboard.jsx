@@ -12,6 +12,7 @@ import {
   FaDesktop,
   FaSlidersH,
   FaServer,
+  FaBiohazard,
 } from "react-icons/fa";
 
 import Header from "../components/Header.jsx";
@@ -23,6 +24,7 @@ import EndpointTelemetryTable from "../components/EndpointTelemetryTable.jsx";
 import IncidentsView from "../components/IncidentsView.jsx";
 import DetectionRulesView from "../components/DetectionRulesView.jsx";
 import EndpointsView from "../components/EndpointsView.jsx";
+import RansomwareView from "../components/RansomwareView.jsx";
 
 import AlertDetailModal from "../components/AlertDetailModal.jsx";
 import EventDetailModal from "../components/EventDetailModal.jsx";
@@ -241,6 +243,26 @@ export default function Dashboard() {
 
               <button
                 type="button"
+                onClick={() => setActiveTab("ransomware")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "ransomware"
+                    ? "bg-rose-600 text-white shadow-md shadow-rose-600/30"
+                    : "bg-slate-800/80 text-rose-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaBiohazard size={12} className={activeTab === "ransomware" ? "" : "text-rose-400"} />
+                <span>Ransomware Center</span>
+                {data.alerts?.filter((a) => a.rule_id?.startsWith("RW-") || a.ruleId?.startsWith("RW-")).length > 0 && (
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-mono ${
+                    activeTab === "ransomware" ? "bg-slate-900/40 text-slate-900 font-bold" : "bg-rose-500/20 text-rose-300"
+                  }`}>
+                    {data.alerts.filter((a) => a.rule_id?.startsWith("RW-") || a.ruleId?.startsWith("RW-")).length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveTab("endpoints")}
                 className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
                   activeTab === "endpoints"
@@ -292,6 +314,34 @@ export default function Dashboard() {
             {/* Tab 1: SOC Overview */}
             {activeTab === "overview" && (
               <div className="space-y-6 animate-fadeIn">
+                {/* Ransomware Threat Status Banner */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-xl border border-rose-500/30 bg-gradient-to-r from-rose-950/30 via-slate-900 to-slate-900/80 p-4 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-rose-500/20 text-rose-400 ring-1 ring-rose-500/30">
+                      <FaBiohazard size={20} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-white tracking-wide">Ransomware Behavioral Threat Defense</h3>
+                        <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300">Phase 3 Active</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Real-time file bursting, honeyfile canary tripwires, and extension anomaly correlation.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("ransomware")}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-500 shadow-sm"
+                    >
+                      <FaBiohazard size={12} />
+                      <span>Open Ransomware Center</span>
+                    </button>
+                  </div>
+                </div>
+
                 <Charts
                   severity={data.severity}
                   eventsTimeline={data.eventsTimeline}
@@ -326,6 +376,16 @@ export default function Dashboard() {
             {activeTab === "rules" && (
               <div className="space-y-4 animate-fadeIn">
                 <DetectionRulesView />
+              </div>
+            )}
+
+            {/* Tab: Ransomware Center */}
+            {activeTab === "ransomware" && (
+              <div className="space-y-4 animate-fadeIn">
+                <RansomwareView
+                  onSelectAlert={(alert) => setSelectedAlert(alert)}
+                  onRefreshDashboard={retry}
+                />
               </div>
             )}
 

@@ -245,3 +245,130 @@ class Event:
         )
         event.validate()
         return event
+
+
+FILE_EVENT_CREATED = "file_created"
+FILE_EVENT_MODIFIED = "file_modified"
+FILE_EVENT_RENAMED = "file_renamed"
+FILE_EVENT_DELETED = "file_deleted"
+
+FILE_EVENT_TYPES = {
+    FILE_EVENT_CREATED,
+    FILE_EVENT_MODIFIED,
+    FILE_EVENT_RENAMED,
+    FILE_EVENT_DELETED,
+}
+
+
+def create_file_event(
+    device_id: str,
+    event_type: str,
+    file_path: str,
+    file_extension: str | None = None,
+    previous_path: str | None = None,
+    process_name: str | None = None,
+    process_id: int | None = None,
+    source: str = "file_monitor",
+    severity: EventSeverity | str = EventSeverity.INFORMATIONAL,
+    timestamp: str | None = None,
+    event_id: str | None = None,
+    hostname: str | None = None,
+    raw_event: str | None = None,
+    attributes: dict[str, Any] | None = None,
+) -> Event:
+    """Create and validate a normalized file-system telemetry event.
+
+    Follows the ThreatLens Phase 1 file-event contract:
+    - Supported types: file_created, file_modified, file_renamed, file_deleted.
+    - Captures file_path, file_extension, optional previous_path for renames.
+    - Treats process_name and process_id as strictly optional.
+    - Never collects file contents or credentials.
+    """
+    if not isinstance(event_type, str) or event_type not in FILE_EVENT_TYPES:
+        valid_types = sorted(FILE_EVENT_TYPES)
+        raise EventValidationError(
+            f"Invalid file event_type '{event_type}'. Must be one of {valid_types}",
+            "event_type",
+        )
+
+    if not file_path or not isinstance(file_path, str) or not file_path.strip():
+        raise EventValidationError("file_path must be a non-empty string", "file_path")
+
+    clean_path = file_path.strip()
+    if "\x00" in clean_path:
+        raise EventValidationError("file_path must not contain null bytes", "file_path")
+    if ".." in clean_path.replace("\\", "/").split("/"):
+        raise EventValidationError("file_path must not contain path traversal ('..')", "file_path")
+
+    # Derive extension if not provided
+    if file_extension is None:
+        last_dot = clean_path.rfind(".")
+        last_slash = max(clean_path.rfind("/"), clean_path.rfind("\\"))
+        if last_dot > last_slash and last_dot < len(clean_path) - 1:
+            ext = clean_path[last_dot:].lower()
+        else:
+            ext = ""
+    else:
+        ext = str(file_extension).lower().strip()
+
+    # Build attributes dict
+    attrs: dict[str, Any] = {
+        "file_path": clean_path,
+        "file_extension": ext,
+    }
+
+    if previous_path is not None:
+        if not isinstance(previous_path, str) or not previous_path.strip():
+            raise EventValidationError("previous_path must be a non-empty string when provided", "previous_path")
+        clean_prev = previous_path.strip()
+        if "\x00" in clean_prev:
+            raise EventValidationError("previous_path must not contain null bytes", "previous_path")
+        if ".." in clean_prev.replace("\\", "/").split("/"):
+            raise EventValidationError("previous_path must not contain path traversal ('..')", "previous_path")
+        attrs["previous_path"] = clean_prev
+
+    if process_name is not None:
+        if not isinstance(process_name, str) or not process_name.strip():
+            raise EventValidationError("process_name must be a non-empty string when provided", "process_name")
+        attrs["process_name"] = process_name.strip()
+
+    if process_id is not None:
+        if not isinstance(process_id, int) or process_id <= 0:
+            raise EventValidationError("process_id must be a positive integer when provided", "process_id")
+        attrs["process_id"] = process_id
+
+    if hostname is not None:
+        attrs["hostname"] = str(hostname).strip()
+
+    if attributes:
+        attrs.update(attributes)
+
+    ts = timestamp or datetime.now(timezone.utc).isoformat()
+    eid = event_id or str(uuid.uuid4())
+
+    if raw_event is None:
+        raw_parts = [f"[{ts}]", f"device={device_id}", f"source={source}", f"type={event_type}", f"path={clean_path}"]
+        if "previous_path" in attrs:
+            raw_parts.append(f"prev={attrs['previous_path']}")
+        if "process_name" in attrs:
+            raw_parts.append(f"proc={attrs['process_name']}")
+        raw_event_text = " ".join(raw_parts)
+    else:
+        raw_event_text = raw_event
+
+    sev = EventSeverity.from_str(severity) if isinstance(severity, str) else severity
+
+    event = Event(
+        event_id=eid,
+        device_id=device_id,
+        timestamp=ts,
+        source=source,
+        event_type=event_type,
+        severity=sev,
+        source_ip=None,
+        username=None,
+        raw_event=raw_event_text,
+        attributes=attrs,
+    )
+    event.validate()
+    return event

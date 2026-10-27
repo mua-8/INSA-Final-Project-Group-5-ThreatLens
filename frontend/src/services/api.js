@@ -224,3 +224,52 @@ export const getEndpointEvents = async (params = {}) => {
   const res = await client.get("/api/v1/events", { params });
   return res.data;
 };
+
+// Ransomware Detection & Policy Configuration (Phase 3)
+export const getRansomwareConfig = async () => {
+  const res = await client.get("/api/v1/ransomware/config");
+  return res.data;
+};
+
+export const updateRansomwareConfig = async (payload) => {
+  const res = await client.patch("/api/v1/ransomware/config", payload);
+  return res.data;
+};
+
+// Canary / Honeyfile Management
+export const getCanaries = async (params = {}) => {
+  const res = await client.get("/api/v1/canaries", { params });
+  return res.data;
+};
+
+export const getCanaryDetails = async (canaryId) => {
+  const res = await client.get(`/api/v1/canaries/${canaryId}`);
+  return res.data;
+};
+
+export const createCanary = async (payload) => {
+  const res = await client.post("/api/v1/canaries", payload);
+  return res.data;
+};
+
+export const updateCanary = async (canaryId, payload) => {
+  const res = await client.patch(`/api/v1/canaries/${canaryId}`, payload);
+  return res.data;
+};
+
+export const deleteCanary = async (canaryId) => {
+  const res = await client.delete(`/api/v1/canaries/${canaryId}`);
+  return res.data;
+};
+
+// Ransomware Alerts & On-Demand Analysis
+export const getRansomwareAlerts = async () => {
+  const res = await client.get("/api/v1/ransomware/alerts");
+  return res.data;
+};
+
+export const runRansomwareAnalysis = async (deviceId = null) => {
+  const payload = deviceId ? { device_id: deviceId } : {};
+  const res = await client.post("/api/v1/ransomware/analyze", payload);
+  return res.data;
+};

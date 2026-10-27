@@ -36,6 +36,8 @@ export const normalizeAlert = (a = {}) => ({
   explanation: a.explanation || "",
   firstSeen: a.first_seen || "",
   lastSeen: a.last_seen || "",
+  settings: a.settings || {},
+  fileEvidence: a.file_evidence || a.fileEvidence || [],
 });
 
 export const normalizeEvent = (e = {}) => ({

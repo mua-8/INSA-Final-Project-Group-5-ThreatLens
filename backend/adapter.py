@@ -215,15 +215,146 @@ def parse_and_adapt(text: str, year: int) -> ParseResult:
     return ParseResult(events=events, malformed_count=malformed)
 
 
+SUPPORTED_FILE_EVENT_TYPES = {
+    "file_created",
+    "file_modified",
+    "file_renamed",
+    "file_deleted",
+}
+
+
+def is_file_event(data: Any) -> bool:
+    """Return True if the record or payload represents a file-system telemetry event."""
+    if data is None:
+        return False
+    if hasattr(data, "keys"):
+        d = dict(data)
+    elif isinstance(data, dict):
+        d = data
+    else:
+        return False
+
+    source = (d.get("source") or "").strip().lower()
+    event_type = (d.get("event_type") or "").strip().lower()
+
+    return source in ("file_monitor", "linux_fs") or event_type in SUPPORTED_FILE_EVENT_TYPES
+
+
+def validate_file_event_payload(data: dict[str, Any]) -> tuple[bool, Optional[str], dict[str, Any]]:
+    """Strictly validate normalized file-system event payload and attributes.
+
+    Returns (is_valid, error_message, normalized_dict).
+    Enforces:
+    - Supported event_type in ('file_created', 'file_modified', 'file_renamed', 'file_deleted')
+    - Required non-empty file_path without null bytes or control characters
+    - Valid previous_path for file_renamed events when present
+    - Optional positive process_id and process_name
+    - Derivation of file_extension if omitted
+    """
+    if not isinstance(data, dict):
+        return False, "File event must be a JSON dictionary.", {}
+
+    event_type = str(data.get("event_type") or "").strip().lower()
+    if event_type not in SUPPORTED_FILE_EVENT_TYPES:
+        return False, f"Invalid file event_type '{event_type}'. Must be one of {sorted(SUPPORTED_FILE_EVENT_TYPES)}.", {}
+
+    attrs = data.get("attributes")
+    if attrs is None:
+        attrs = {}
+    elif isinstance(attrs, str):
+        try:
+            attrs = json.loads(attrs)
+        except Exception:
+            return False, "Field 'attributes' must be a valid JSON dictionary or object.", {}
+    elif not isinstance(attrs, dict):
+        return False, "Field 'attributes' must be a dictionary.", {}
+
+    # Extract file_path from attributes or top-level
+    file_path = attrs.get("file_path") or data.get("file_path")
+    if not file_path or not isinstance(file_path, str) or not file_path.strip():
+        return False, "File event requires a non-empty 'file_path' in attributes or event root.", {}
+
+    clean_path = file_path.strip()
+    if "\x00" in clean_path:
+        return False, "File path must not contain null bytes.", {}
+    if ".." in clean_path.replace("\\", "/").split("/"):
+        return False, "File path must not contain path traversal sequences ('..').", {}
+
+    # File extension
+    file_ext = attrs.get("file_extension") or data.get("file_extension")
+    if file_ext is not None:
+        clean_ext = str(file_ext).strip().lower()
+        if clean_ext and not clean_ext.startswith("."):
+            clean_ext = f".{clean_ext}"
+    else:
+        last_dot = clean_path.rfind(".")
+        last_slash = max(clean_path.rfind("/"), clean_path.rfind("\\"))
+        if last_dot > last_slash and last_dot < len(clean_path) - 1:
+            clean_ext = clean_path[last_dot:].lower()
+        else:
+            clean_ext = ""
+
+    # Previous path (rename)
+    previous_path = attrs.get("previous_path") or data.get("previous_path")
+    clean_prev: Optional[str] = None
+    if previous_path is not None:
+        if not isinstance(previous_path, str) or not previous_path.strip():
+            return False, "Field 'previous_path' must be a non-empty string when provided.", {}
+        clean_prev = previous_path.strip()
+        if "\x00" in clean_prev:
+            return False, "Field 'previous_path' must not contain null bytes.", {}
+        if ".." in clean_prev.replace("\\", "/").split("/"):
+            return False, "Field 'previous_path' must not contain path traversal sequences ('..').", {}
+
+    # Process attribution (strictly optional)
+    proc_id = attrs["process_id"] if "process_id" in attrs else data.get("process_id")
+    clean_proc_id: Optional[int] = None
+    if proc_id is not None:
+        try:
+            clean_proc_id = int(proc_id)
+            if clean_proc_id <= 0:
+                return False, "Field 'process_id' must be a positive integer.", {}
+        except (ValueError, TypeError):
+            return False, "Field 'process_id' must be an integer.", {}
+
+    proc_name = attrs["process_name"] if "process_name" in attrs else data.get("process_name")
+    clean_proc_name: Optional[str] = None
+    if proc_name is not None:
+        if not isinstance(proc_name, str) or not proc_name.strip():
+            return False, "Field 'process_name' must be a non-empty string when provided.", {}
+        clean_proc_name = proc_name.strip()
+
+    normalized_record = {
+        "event_type": event_type,
+        "file_path": clean_path,
+        "file_extension": clean_ext,
+        "previous_path": clean_prev,
+        "process_id": clean_proc_id,
+        "process_name": clean_proc_name,
+        "attributes": dict(attrs),
+    }
+    # Update attributes with canonical extracted fields
+    normalized_record["attributes"]["file_path"] = clean_path
+    normalized_record["attributes"]["file_extension"] = clean_ext
+    if clean_prev:
+        normalized_record["attributes"]["previous_path"] = clean_prev
+    if clean_proc_id:
+        normalized_record["attributes"]["process_id"] = clean_proc_id
+    if clean_proc_name:
+        normalized_record["attributes"]["process_name"] = clean_proc_name
+
+    return True, None, normalized_record
+
+
 def adapt_endpoint_event_to_backend(data: Any) -> Optional[Event]:
     """Convert an endpoint event record or dictionary to a backend Event.
 
     Converts valid SSH authentication, invalid user, and disconnect telemetry
     from endpoint agents into backend.parser.Event instances.
 
-    Explicitly ignores non-SSH sources (such as windows_event, sysmon, agent
-    internals) and unsupported event types, safely returning None without
-    corrupting SIEM event state or misclassifying telemetry.
+    Explicitly ignores non-SSH sources (such as windows_event, sysmon, file_monitor,
+    linux_fs) and unsupported event types, safely returning None without
+    corrupting SIEM event state or misclassifying telemetry into SSH detection rules.
     """
     if data is None:
         return None
@@ -236,11 +367,15 @@ def adapt_endpoint_event_to_backend(data: Any) -> Optional[Event]:
         return None
 
     source = (d.get("source") or "").strip().lower()
-    # Explicitly reject non-SSH sources (e.g. Windows logon, Sysmon process telemetry)
-    if source in ("windows_event", "sysmon"):
+    # Explicitly reject non-SSH sources (e.g. Windows logon, Sysmon, File-system telemetry)
+    if source in ("windows_event", "sysmon", "file_monitor", "linux_fs"):
         return None
 
-    event_type = (d.get("event_type") or "").strip()
+    event_type = (d.get("event_type") or "").strip().lower()
+    # Explicitly reject file-system events from SSH detection engine
+    if event_type in SUPPORTED_FILE_EVENT_TYPES:
+        return None
+
     if event_type not in ENDPOINT_EVENT_TYPE_MAP:
         return None
 

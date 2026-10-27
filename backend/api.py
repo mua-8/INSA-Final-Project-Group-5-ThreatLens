@@ -142,6 +142,11 @@ def reset_detection_engine(db_path: Optional[str] = None) -> None:
     """Reset or clear the cached DetectionEngine for a given database path."""
     target_path = os.path.abspath(db_path or DB_PATH)
     _detection_engines.pop(target_path, None)
+    try:
+        from backend.ransomware_detection import reset_ransomware_engine
+        reset_ransomware_engine(target_path)
+    except ImportError:
+        pass
 
 
 def sync_rule_to_engine(engine, rule_dict: dict) -> None:
@@ -149,10 +154,22 @@ def sync_rule_to_engine(engine, rule_dict: dict) -> None:
     rule_id = (rule_dict.get("rule_id") or "").strip().upper()
     if not rule_id or not hasattr(engine, "config") or not engine.config:
         return
-    if not hasattr(engine.config, "rules") or rule_id not in engine.config.rules:
+    if not hasattr(engine.config, "rules"):
         return
 
+    if rule_id not in engine.config.rules:
+        engine.config.rules[rule_id] = {
+            "name": rule_dict.get("name") or rule_id,
+            "enabled": True,
+            "threshold": 5,
+            "window_minutes": 5,
+            "severity": "medium",
+            "conditions": {},
+        }
+
     current = engine.config.rules[rule_id]
+    if "name" in rule_dict and rule_dict["name"]:
+        current["name"] = str(rule_dict["name"]).strip()
     if "enabled" in rule_dict and rule_dict["enabled"] is not None:
         current["enabled"] = bool(rule_dict["enabled"])
     if "severity" in rule_dict and rule_dict["severity"]:
@@ -169,10 +186,15 @@ def sync_rule_to_engine(engine, rule_dict: dict) -> None:
         try:
             cond_map = json.loads(conditions)
             if isinstance(cond_map, dict):
+                current["conditions"] = cond_map
                 for k, v in cond_map.items():
                     current[k] = v
         except Exception:
             pass
+    elif isinstance(conditions, dict):
+        current["conditions"] = conditions
+        for k, v in conditions.items():
+            current[k] = v
 
 
 def sync_engine_rules_from_db(engine, conn: sqlite3.Connection) -> None:
@@ -209,7 +231,7 @@ def _hydrate_engine_from_db(db_path: str, engine) -> None:
         from backend.parser import Event
         from backend.detection import Alert
 
-        # 1. Hydrate events into engine._history
+        # 1. Hydrate events into engine._history and secondary indexes
         event_rows = conn.execute(
             "SELECT id, timestamp, host, username, source_ip, port, method, outcome, event_type, raw_line, line_hash "
             "FROM events ORDER BY timestamp ASC, id ASC"
@@ -237,9 +259,12 @@ def _hydrate_engine_from_db(db_path: str, engine) -> None:
                 id=r["id"],
             )
             events_by_id[ev.id] = ev
-            hkey = engine._history_key(ev.source_ip, ev.host)
-            bucket = engine._history.setdefault(hkey, {})
-            bucket[ev.line_hash] = ev
+            if hasattr(engine, "_index_event"):
+                engine._index_event(ev)
+            else:
+                hkey = engine._history_key(ev.source_ip, ev.host)
+                bucket = engine._history.setdefault(hkey, {})
+                bucket[ev.line_hash] = ev
 
         # 2. Hydrate alerts into engine.alerts
         alert_rows = conn.execute("SELECT * FROM alerts ORDER BY id ASC").fetchall()
@@ -503,58 +528,56 @@ def _err(message: str, status: int = 400, data: Optional[dict] = None):
 # --------------------------------------------------------------------------
 # Endpoint Agent Ingestion (POST /api/v1/events)
 # --------------------------------------------------------------------------
+# Endpoint Agent Ingestion (POST /api/v1/events & POST /api/v1/file-events)
+# --------------------------------------------------------------------------
 
-@app.route("/api/v1/events", methods=["POST"])
-def ingest_endpoint_events():
-    """Ingest a batch of normalized security events from the ThreatLens Endpoint Agent.
-
-    Enforces:
-    - 5MB maximum body size
-    - Configured THREATLENS_AGENT_API_KEY Bearer authentication
-    - Strict validation of batch count, structure, UUIDs, timestamps, severity, and optional IPs
-    - Transactional persistence in endpoint_events
-    - Idempotent acknowledgment of identical retries
-    - Rejection (409 Conflict) of conflicting duplicate event IDs
-    """
-    # 1. Payload size check
+def _validate_agent_auth() -> tuple[Optional[dict], Optional[Any]]:
+    """Validate payload size, Bearer token authorization, and JSON structure."""
     content_length = request.content_length
     if content_length is not None and content_length > MAX_PAYLOAD_SIZE_BYTES:
-        return _err(f"Request body exceeds maximum size limit of {MAX_PAYLOAD_SIZE_BYTES // (1024 * 1024)}MB.", 413)
+        return None, _err(f"Request body exceeds maximum size limit of {MAX_PAYLOAD_SIZE_BYTES // (1024 * 1024)}MB.", 413)
 
     raw_bytes = request.get_data()
     if len(raw_bytes) > MAX_PAYLOAD_SIZE_BYTES:
-        return _err(f"Request body exceeds maximum size limit of {MAX_PAYLOAD_SIZE_BYTES // (1024 * 1024)}MB.", 413)
+        return None, _err(f"Request body exceeds maximum size limit of {MAX_PAYLOAD_SIZE_BYTES // (1024 * 1024)}MB.", 413)
 
     if not raw_bytes or not raw_bytes.strip():
-        return _err("Request body must not be empty.", 400)
+        return None, _err("Request body must not be empty.", 400)
 
-    # 2. Authentication check: THREATLENS_AGENT_API_KEY Bearer token
     configured_key = os.environ.get("THREATLENS_AGENT_API_KEY")
     if not configured_key or not configured_key.strip():
-        return _err("Server agent authentication is unconfigured or disabled.", 401)
+        return None, _err("Server agent authentication is unconfigured or disabled.", 401)
 
     auth_header = request.headers.get("Authorization")
     if not auth_header:
-        return _err("Missing Authorization header.", 401)
+        return None, _err("Missing Authorization header.", 401)
 
     parts = auth_header.strip().split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        return _err("Authorization header must use 'Bearer <token>' format.", 401)
+        return None, _err("Authorization header must use 'Bearer <token>' format.", 401)
 
     token = parts[1].strip()
     if not hmac.compare_digest(token, configured_key.strip()):
-        return _err("Invalid agent API key.", 401)
+        return None, _err("Invalid agent API key.", 401)
 
-    # 3. JSON parsing
     try:
         body = json.loads(raw_bytes.decode("utf-8"))
     except Exception as exc:
-        return _err(f"Malformed JSON in request body: {exc}", 400)
+        return None, _err(f"Malformed JSON in request body: {exc}", 400)
 
     if not isinstance(body, dict):
-        return _err("Request payload must be a JSON object.", 400)
+        return None, _err("Request payload must be a JSON object.", 400)
 
-    # 4. Top-level structure validation
+    return body, None
+
+
+def _process_and_store_endpoint_batch(body: dict):
+    """Validate and transactionally store an endpoint event batch.
+
+    Supports both SSH authentication telemetry and normalized file-system telemetry.
+    Persists file events to both endpoint_events and file_events tables, while
+    guaranteeing that file events never pollute SSH tables or detection rules.
+    """
     device_id = body.get("device_id")
     if not device_id or not isinstance(device_id, str) or not device_id.strip():
         return _err("Field 'device_id' is required and must be a non-empty string.", 400)
@@ -573,7 +596,8 @@ def ingest_endpoint_events():
     if sent_at is not None and not isinstance(sent_at, (int, float)):
         return _err("Field 'sent_at' must be a numeric timestamp.", 400)
 
-    # 5. Event fields validation
+    from backend.adapter import is_file_event, validate_file_event_payload
+
     validated_records = []
     seen_batch_ids = {}
 
@@ -581,7 +605,6 @@ def ingest_endpoint_events():
         if not isinstance(ev, dict):
             return _err(f"Event at index {idx} must be a JSON object.", 400)
 
-        # event_id (UUID)
         eid = ev.get("event_id")
         if not eid or not isinstance(eid, str):
             return _err(f"Event at index {idx}: 'event_id' is required and must be a UUID string.", 400)
@@ -592,13 +615,11 @@ def ingest_endpoint_events():
         except (ValueError, TypeError, AttributeError):
             return _err(f"Event at index {idx}: 'event_id' must be a valid UUID string, got '{eid}'.", 400)
 
-        # device_id
         ev_device_id = ev.get("device_id")
         if not ev_device_id or not isinstance(ev_device_id, str) or not ev_device_id.strip():
             return _err(f"Event '{norm_eid}': 'device_id' is required and must be a non-empty string.", 400)
         ev_device_id = ev_device_id.strip()
 
-        # timestamp (ISO-8601 with timezone offset)
         ts_raw = ev.get("timestamp")
         if not ts_raw or not isinstance(ts_raw, str) or not ts_raw.strip():
             return _err(f"Event '{norm_eid}': 'timestamp' is required and must be a non-empty ISO-8601 string.", 400)
@@ -614,19 +635,16 @@ def ingest_endpoint_events():
             return _err(f"Event '{norm_eid}': timestamp must include timezone offset: '{ts_raw}'.", 400)
         norm_timestamp = dt.astimezone(timezone.utc).isoformat()
 
-        # source
         source = ev.get("source")
         if not source or not isinstance(source, str) or not source.strip():
             return _err(f"Event '{norm_eid}': 'source' is required and must be a non-empty string.", 400)
         source = source.strip()
 
-        # event_type
         event_type = ev.get("event_type")
         if not event_type or not isinstance(event_type, str) or not event_type.strip():
             return _err(f"Event '{norm_eid}': 'event_type' is required and must be a non-empty string.", 400)
         event_type = event_type.strip()
 
-        # severity
         sev = ev.get("severity")
         if not sev or not isinstance(sev, str):
             return _err(f"Event '{norm_eid}': 'severity' is required.", 400)
@@ -637,14 +655,12 @@ def ingest_endpoint_events():
                 400,
             )
 
-        # schema_version
         schema_ver = ev.get("schema_version", "1.0.0")
         if not isinstance(schema_ver, str) or not schema_ver.strip():
             schema_ver = "1.0.0"
         else:
             schema_ver = schema_ver.strip()
 
-        # source_ip
         source_ip = ev.get("source_ip")
         norm_source_ip = None
         if source_ip is not None and source_ip != "":
@@ -657,7 +673,6 @@ def ingest_endpoint_events():
             except ValueError:
                 return _err(f"Event '{norm_eid}': invalid source IP address '{source_ip}'.", 400)
 
-        # username
         username = ev.get("username")
         norm_username = None
         if username is not None:
@@ -665,7 +680,6 @@ def ingest_endpoint_events():
                 return _err(f"Event '{norm_eid}': 'username' must be a string or null.", 400)
             norm_username = username.strip()
 
-        # raw_event
         raw_event = ev.get("raw_event")
         norm_raw_event = None
         if raw_event is not None:
@@ -673,14 +687,30 @@ def ingest_endpoint_events():
                 return _err(f"Event '{norm_eid}': 'raw_event' must be a string or null.", 400)
             norm_raw_event = raw_event
 
-        # attributes
         attributes = ev.get("attributes")
         if attributes is None:
             norm_attributes = {}
         elif isinstance(attributes, dict):
-            norm_attributes = attributes
+            norm_attributes = dict(attributes)
         else:
             return _err(f"Event '{norm_eid}': 'attributes' must be a dictionary.", 400)
+
+        # File-system telemetry validation
+        if is_file_event(ev):
+            ok, err_msg, norm_file_rec = validate_file_event_payload({
+                "event_type": event_type,
+                "attributes": norm_attributes,
+                "raw_event": norm_raw_event,
+                "device_id": ev_device_id,
+                "source": source,
+                "file_path": ev.get("file_path"),
+                "previous_path": ev.get("previous_path"),
+                "process_name": ev.get("process_name"),
+                "process_id": ev.get("process_id"),
+            })
+            if not ok:
+                return _err(f"Event '{norm_eid}': {err_msg}", 400)
+            norm_attributes = norm_file_rec["attributes"]
 
         rec = {
             "event_id": norm_eid,
@@ -696,7 +726,6 @@ def ingest_endpoint_events():
             "attributes": norm_attributes,
         }
 
-        # Intra-batch conflict check
         if norm_eid in seen_batch_ids:
             prev_rec = seen_batch_ids[norm_eid]
             if prev_rec != rec:
@@ -710,7 +739,6 @@ def ingest_endpoint_events():
         seen_batch_ids[norm_eid] = rec
         validated_records.append(rec)
 
-    # 6. Transactional Storage & Duplicate/Retry Resolution
     conn = get_db()
     to_insert = []
     acknowledged_ids = []
@@ -744,10 +772,8 @@ def ingest_endpoint_events():
             )
 
             if is_identical:
-                # Safely acknowledge identical retry
                 acknowledged_ids.append(eid)
             else:
-                # Conflicting duplicate: reject immediately
                 return jsonify({
                     "ok": False,
                     "status": "conflict",
@@ -761,6 +787,7 @@ def ingest_endpoint_events():
             from backend.adapter import adapt_endpoint_event_to_backend
             engine = get_detection_engine(DB_PATH)
             new_adapted_events = []
+            new_file_events = []
 
             with conn:
                 for rec in to_insert:
@@ -786,6 +813,38 @@ def ingest_endpoint_events():
                         source_ip=rec.get("source_ip"),
                     )
                     acknowledged_ids.append(rec["event_id"])
+
+                    # If file event, persist into dedicated file_events table
+                    if is_file_event(rec):
+                        attrs = rec.get("attributes", {})
+                        fe_id = repo.insert_file_event(
+                            conn,
+                            event_id=rec["event_id"],
+                            device_id=rec["device_id"],
+                            timestamp=rec["timestamp"],
+                            event_type=rec["event_type"],
+                            file_path=attrs.get("file_path", ""),
+                            file_extension=attrs.get("file_extension", ""),
+                            previous_path=attrs.get("previous_path"),
+                            process_name=attrs.get("process_name"),
+                            process_id=attrs.get("process_id"),
+                            source=rec["source"],
+                            severity=rec["severity"],
+                            raw_event=rec.get("raw_event"),
+                            attributes=json.dumps(attrs, sort_keys=True),
+                        )
+                        new_file_events.append({
+                            "id": fe_id,
+                            "event_id": rec["event_id"],
+                            "device_id": rec["device_id"],
+                            "timestamp": rec["timestamp"],
+                            "event_type": rec["event_type"],
+                            "file_path": attrs.get("file_path", ""),
+                            "file_extension": attrs.get("file_extension", ""),
+                            "previous_path": attrs.get("previous_path"),
+                            "process_name": attrs.get("process_name"),
+                            "process_id": attrs.get("process_id"),
+                        })
 
                     ev = adapt_endpoint_event_to_backend(rec)
                     if ev is not None:
@@ -850,6 +909,14 @@ def ingest_endpoint_events():
                                     e.id for e in alert.events.values() if hasattr(e, "id") and e.id
                                 ]
                                 repo.insert_alert_evidence(conn, alert.id, evidence_db_ids)
+
+                if new_file_events:
+                    try:
+                        from backend.ransomware_detection import get_ransomware_engine
+                        rw_engine = get_ransomware_engine(DB_PATH)
+                        rw_engine.process_file_events(conn, events=new_file_events)
+                    except Exception as rw_exc:
+                        logger.error("Ransomware detection processing failed: %s", rw_exc)
         except sqlite3.IntegrityError as exc:
             return jsonify({
                 "ok": False,
@@ -865,6 +932,25 @@ def ingest_endpoint_events():
         "acknowledged": acknowledged_ids,
         "count": len(acknowledged_ids),
     }), 200
+
+
+@app.route("/api/v1/events", methods=["POST"])
+def ingest_endpoint_events():
+    """Ingest a batch of normalized security events from the ThreatLens Endpoint Agent.
+
+    Enforces:
+    - 5MB maximum body size
+    - Configured THREATLENS_AGENT_API_KEY Bearer authentication
+    - Strict validation of batch count, structure, UUIDs, timestamps, severity, and optional IPs
+    - Transactional persistence in endpoint_events and file_events
+    - Idempotent acknowledgment of identical retries
+    - Rejection (409 Conflict) of conflicting duplicate event IDs
+    """
+    body, err_resp = _validate_agent_auth()
+    if err_resp:
+        return err_resp
+    return _process_and_store_endpoint_batch(body)
+
 
 
 @app.route("/api/v1/events", methods=["GET"])
@@ -921,6 +1007,436 @@ def get_endpoint_event_detail(event_id: str):
         except Exception:
             pass
     return _ok(d)
+
+
+# --------------------------------------------------------------------------
+# File-System Telemetry Endpoints (Phase 1)
+# --------------------------------------------------------------------------
+
+@app.route("/api/v1/file-events", methods=["POST"])
+def ingest_file_events():
+    """Explicit endpoint for ingesting normalized file-system telemetry events.
+
+    Requires Bearer token authentication matching THREATLENS_AGENT_API_KEY.
+    Accepts:
+    - Batch payload: {"device_id": "...", "events": [...]}
+    - Single event payload: {"device_id": "...", "event_id": "...", "event_type": "...", ...}
+    Strictly enforces file-system contract validation and stores events in both
+    endpoint_events and file_events tables.
+    """
+    body, err_resp = _validate_agent_auth()
+    if err_resp:
+        return err_resp
+
+    from backend.adapter import is_file_event
+
+    # Normalize to batch structure
+    if "events" in body and isinstance(body["events"], list):
+        device_id = body.get("device_id")
+        if not device_id or not isinstance(device_id, str) or not device_id.strip():
+            return _err("Field 'device_id' is required and must be a non-empty string.", 400)
+        events_list = body["events"]
+    else:
+        device_id = body.get("device_id")
+        if not device_id or not isinstance(device_id, str) or not device_id.strip():
+            return _err("Field 'device_id' is required and must be a non-empty string.", 400)
+        events_list = [body]
+
+    if len(events_list) == 0:
+        return _err("Field 'events' must contain at least one event.", 400)
+
+    if len(events_list) > MAX_BATCH_SIZE:
+        return _err(f"Batch event count {len(events_list)} exceeds maximum allowed limit of {MAX_BATCH_SIZE}.", 400)
+
+    for idx, ev in enumerate(events_list):
+        if not isinstance(ev, dict):
+            return _err(f"Event at index {idx} must be a JSON object.", 400)
+        if "source" not in ev or not ev["source"]:
+            ev["source"] = "file_monitor"
+        if not is_file_event(ev):
+            return _err(f"Event at index {idx}: not a supported file-system event type.", 400)
+
+    batch_payload = {
+        "device_id": device_id,
+        "events": events_list,
+        "sent_at": body.get("sent_at", time.time()),
+    }
+    return _process_and_store_endpoint_batch(batch_payload)
+
+
+@app.route("/api/v1/file-events", methods=["GET"])
+def list_file_events_route():
+    """List and filter normalized file-system telemetry events."""
+    try:
+        limit = _int_param("limit", 100, 1, 1000)
+        offset = _int_param("offset", 0)
+    except ValueError as exc:
+        return _err(str(exc))
+
+    conn = get_db()
+    rows = repo.list_file_events(
+        conn,
+        device_id=request.args.get("device_id"),
+        event_type=request.args.get("event_type"),
+        file_path=request.args.get("file_path"),
+        file_extension=request.args.get("file_extension"),
+        source=request.args.get("source"),
+        severity=request.args.get("severity"),
+        since=request.args.get("since"),
+        until=request.args.get("until"),
+        limit=limit,
+        offset=offset,
+    )
+    total = repo.count_file_events(
+        conn,
+        device_id=request.args.get("device_id"),
+        event_type=request.args.get("event_type"),
+        file_extension=request.args.get("file_extension"),
+    )
+    result = []
+    for r in rows:
+        d = dict(r)
+        if "attributes" in d and isinstance(d["attributes"], str):
+            try:
+                d["attributes"] = json.loads(d["attributes"])
+            except Exception:
+                pass
+        result.append(d)
+
+    return jsonify({
+        "ok": True,
+        "events": result,
+        "count": len(result),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "data": {"events": result, "count": len(result), "total": total},
+    })
+
+
+@app.route("/api/v1/file-events/<event_id>", methods=["GET"])
+def get_file_event_detail_route(event_id: str):
+    """Retrieve details for a single file-system event by event_id UUID."""
+    conn = get_db()
+    ev = repo.get_file_event(conn, event_id)
+    if ev is None:
+        return _err("File event not found.", 404)
+    d = dict(ev)
+    if "attributes" in d and isinstance(d["attributes"], str):
+        try:
+            d["attributes"] = json.loads(d["attributes"])
+        except Exception:
+            pass
+    return _ok(d)
+
+
+# --------------------------------------------------------------------------
+# Ransomware Detection & Canary Management Endpoints (Phase 2)
+# --------------------------------------------------------------------------
+
+@app.route("/api/v1/ransomware/config", methods=["GET"])
+def get_ransomware_config_route():
+    """Retrieve active ransomware policy parameters, thresholds, and extension lists."""
+    conn = get_db()
+    row = repo.get_ransomware_policy(conn, "default")
+    if not row:
+        return _err("Ransomware policy configuration not found.", 404)
+    data = dict(row)
+    if "suspicious_extensions" in data and isinstance(data["suspicious_extensions"], str):
+        try:
+            data["suspicious_extensions"] = json.loads(data["suspicious_extensions"])
+        except Exception:
+            pass
+    return _ok(data)
+
+
+@app.route("/api/v1/ransomware/config", methods=["PUT", "PATCH"])
+def update_ransomware_config_route():
+    """Update validated burst thresholds, windows, or suspicious-extension policies."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or not body:
+        return _err("Request body must be a non-empty JSON object.", 400)
+
+    try:
+        conn = get_db()
+        success = repo.update_ransomware_policy(
+            conn,
+            policy_name="default",
+            burst_window_seconds=body.get("burst_window_seconds"),
+            burst_modify_threshold=body.get("burst_modify_threshold"),
+            burst_rename_threshold=body.get("burst_rename_threshold"),
+            burst_delete_threshold=body.get("burst_delete_threshold"),
+            burst_combined_threshold=body.get("burst_combined_threshold"),
+            suspicious_extensions=body.get("suspicious_extensions"),
+            canary_enabled=body.get("canary_enabled"),
+            burst_enabled=body.get("burst_enabled"),
+            extension_enabled=body.get("extension_enabled"),
+            correlation_window_seconds=body.get("correlation_window_seconds"),
+            dedupe_gap_seconds=body.get("dedupe_gap_seconds"),
+        )
+        if not success:
+            return _err("No valid fields provided to update.", 400)
+        conn.commit()
+
+        # Invalidate in-memory ransomware engine config
+        from backend.ransomware_detection import get_ransomware_engine
+        rw_engine = get_ransomware_engine(DB_PATH)
+        rw_engine.load_config_from_db(conn)
+
+        row = repo.get_ransomware_policy(conn, "default")
+        data = dict(row)
+        if "suspicious_extensions" in data and isinstance(data["suspicious_extensions"], str):
+            try:
+                data["suspicious_extensions"] = json.loads(data["suspicious_extensions"])
+            except Exception:
+                pass
+        return _ok(data)
+    except ValueError as exc:
+        return _err(str(exc), 400)
+    except Exception as exc:
+        return _err(f"Failed to update ransomware configuration: {exc}", 500)
+
+
+@app.route("/api/v1/canaries", methods=["GET"])
+def list_canaries_route():
+    """List registered canary / honeyfiles with optional filtering."""
+    try:
+        limit = _int_param("limit", 100, 1, 1000)
+        offset = _int_param("offset", 0)
+    except ValueError as exc:
+        return _err(str(exc))
+
+    conn = get_db()
+    enabled_param = request.args.get("enabled")
+    enabled = None
+    if enabled_param is not None and enabled_param != "":
+        enabled = 1 if enabled_param.lower() in ("true", "1", "yes") else 0
+
+    rows = repo.list_canary_files(
+        conn,
+        device_id=request.args.get("device_id"),
+        enabled=enabled,
+        search=request.args.get("search"),
+        limit=limit,
+        offset=offset,
+    )
+    result = [dict(r) for r in rows]
+    return jsonify({
+        "ok": True,
+        "canaries": result,
+        "count": len(result),
+        "data": {"canaries": result, "count": len(result)},
+    })
+
+
+@app.route("/api/v1/canaries", methods=["POST"])
+def create_canary_route():
+    """Register a new canary / honeyfile path."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return _err("Request body must be a JSON object.", 400)
+
+    file_path = body.get("file_path")
+    if not file_path or not isinstance(file_path, str) or not file_path.strip():
+        return _err("Field 'file_path' is required and must be a non-empty string.", 400)
+
+    clean_path = file_path.strip()
+    if "\x00" in clean_path:
+        return _err("Field 'file_path' must not contain null bytes.", 400)
+    if ".." in clean_path.replace("\\", "/").split("/"):
+        return _err("Field 'file_path' must not contain path traversal sequences ('..').", 400)
+
+    canary_id = body.get("canary_id")
+    if not canary_id or not isinstance(canary_id, str) or not canary_id.strip():
+        canary_id = f"canary-{uuid.uuid4().hex[:8]}"
+    else:
+        canary_id = canary_id.strip()
+
+    device_id = body.get("device_id")
+    if device_id is not None:
+        device_id = str(device_id).strip()
+        if device_id in ("", "*"):
+            device_id = None
+
+    severity = (body.get("severity") or "high").strip().lower()
+    valid_sev = {"low", "medium", "high", "critical"}
+    if severity not in valid_sev:
+        return _err(f"Invalid severity '{severity}'. Must be one of {sorted(valid_sev)}.", 400)
+
+    description = (body.get("description") or "").strip()
+    enabled = 1 if body.get("enabled", True) else 0
+
+    conn = get_db()
+    existing = repo.get_canary_file(conn, canary_id)
+    if existing:
+        return jsonify({
+            "ok": False,
+            "status": "conflict",
+            "error": f"Canary with canary_id '{canary_id}' already exists.",
+        }), 409
+
+    try:
+        repo.insert_canary_file(
+            conn,
+            canary_id=canary_id,
+            file_path=clean_path,
+            device_id=device_id,
+            description=description,
+            severity=severity,
+            enabled=enabled,
+        )
+        conn.commit()
+        row = repo.get_canary_file(conn, canary_id)
+        return _ok({"canary": dict(row)}, 201)
+    except sqlite3.IntegrityError as exc:
+        return jsonify({
+            "ok": False,
+            "status": "conflict",
+            "error": f"Integrity constraint violation: {exc}",
+        }), 409
+    except Exception as exc:
+        return _err(f"Failed to create canary file: {exc}", 500)
+
+
+@app.route("/api/v1/canaries/<canary_id>", methods=["GET"])
+def get_canary_detail_route(canary_id: str):
+    """Retrieve details for a single canary definition."""
+    conn = get_db()
+    row = repo.get_canary_file(conn, canary_id)
+    if not row:
+        return _err("Canary file not found.", 404)
+    return _ok(dict(row))
+
+
+@app.route("/api/v1/canaries/<canary_id>", methods=["PUT", "PATCH"])
+def update_canary_route(canary_id: str):
+    """Update an existing canary definition."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or not body:
+        return _err("Request body must be a non-empty JSON object.", 400)
+
+    file_path = body.get("file_path")
+    if file_path is not None:
+        if not isinstance(file_path, str) or not file_path.strip():
+            return _err("Field 'file_path' must be a non-empty string.", 400)
+        clean_path = file_path.strip()
+        if "\x00" in clean_path:
+            return _err("Field 'file_path' must not contain null bytes.", 400)
+        if ".." in clean_path.replace("\\", "/").split("/"):
+            return _err("Field 'file_path' must not contain path traversal sequences ('..').", 400)
+    else:
+        clean_path = None
+
+    severity = body.get("severity")
+    if severity is not None:
+        severity = str(severity).strip().lower()
+        valid_sev = {"low", "medium", "high", "critical"}
+        if severity not in valid_sev:
+            return _err(f"Invalid severity '{severity}'. Must be one of {sorted(valid_sev)}.", 400)
+
+    device_id = body.get("device_id")
+    if device_id is not None:
+        device_id = str(device_id).strip()
+
+    description = body.get("description")
+    if description is not None:
+        description = str(description).strip()
+
+    enabled = None
+    if "enabled" in body:
+        enabled = 1 if body.get("enabled") else 0
+
+    conn = get_db()
+    existing = repo.get_canary_file(conn, canary_id)
+    if not existing:
+        return _err("Canary file not found.", 404)
+
+    try:
+        success = repo.update_canary_file(
+            conn,
+            canary_id=canary_id,
+            file_path=clean_path,
+            device_id=device_id,
+            description=description,
+            severity=severity,
+            enabled=enabled,
+        )
+        conn.commit()
+        updated = repo.get_canary_file(conn, canary_id)
+        return _ok(dict(updated))
+    except Exception as exc:
+        return _err(f"Failed to update canary file: {exc}", 500)
+
+
+@app.route("/api/v1/canaries/<canary_id>", methods=["DELETE"])
+def delete_canary_route(canary_id: str):
+    """Delete a canary definition from the registry."""
+    conn = get_db()
+    existing = repo.get_canary_file(conn, canary_id)
+    if not existing:
+        return _err("Canary file not found.", 404)
+
+    repo.delete_canary_file(conn, canary_id)
+    conn.commit()
+    return _ok({"deleted": True, "canary_id": canary_id})
+
+
+@app.route("/api/v1/ransomware/analyze", methods=["POST"])
+def analyze_ransomware_route():
+    """Trigger on-demand evaluation of ransomware detection indicators."""
+    body = request.get_json(silent=True) or {}
+    device_id = body.get("device_id")
+    if device_id is not None:
+        device_id = str(device_id).strip() or None
+
+    conn = get_db()
+    from backend.ransomware_detection import get_ransomware_engine
+    rw_engine = get_ransomware_engine(DB_PATH)
+    result = rw_engine.process_file_events(conn, device_id=device_id)
+    conn.commit()
+
+    return _ok({
+        "events_evaluated": result.events_evaluated,
+        "new_alerts_count": len(result.new_alerts),
+        "updated_alerts_count": len(result.updated_alerts),
+        "new_incidents_count": len(result.new_incidents),
+        "updated_incidents_count": len(result.updated_incidents),
+        "new_alerts": result.new_alerts,
+        "updated_alerts": result.updated_alerts,
+        "new_incidents": result.new_incidents,
+        "updated_incidents": result.updated_incidents,
+    })
+
+
+@app.route("/api/v1/ransomware/alerts", methods=["GET"])
+def list_ransomware_alerts_route():
+    """List recent ransomware alerts with attached file evidence."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT * FROM alerts
+           WHERE rule_id LIKE 'RW-%'
+           ORDER BY last_seen DESC""",
+    ).fetchall()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        if "settings" in d and isinstance(d["settings"], str):
+            try:
+                d["settings"] = json.loads(d["settings"])
+            except Exception:
+                pass
+        evidence_rows = repo.get_alert_file_evidence(conn, d["id"])
+        d["file_evidence"] = [dict(ev) for ev in evidence_rows]
+        result.append(d)
+
+    return jsonify({
+        "ok": True,
+        "alerts": result,
+        "count": len(result),
+        "data": {"alerts": result, "count": len(result)},
+    })
+
 
 
 # --------------------------------------------------------------------------
@@ -1283,6 +1799,13 @@ def get_alert(alert_id: int):
     data["evidence"] = evidence_rows
     data["status_history"] = _rows(history)
     data["notes"] = _rows(notes)
+    file_evidence = repo.get_alert_file_evidence(conn, alert_id)
+    data["file_evidence"] = [dict(r) for r in file_evidence]
+    if "settings" in data and isinstance(data["settings"], str):
+        try:
+            data["settings"] = json.loads(data["settings"])
+        except Exception:
+            pass
     if not data.get("target_host"):
         data["target_host"] = next((ev.get("host") for ev in evidence_rows if ev.get("host")), None)
     return _ok(data)
@@ -1703,9 +2226,13 @@ def create_detection_rule():
     except (ValueError, TypeError):
         return _err("'window_minutes' must be a positive integer >= 1.")
 
-    conditions = body.get("conditions", "{}")
-    if isinstance(conditions, dict):
-        conditions = json.dumps(conditions)
+    conditions_raw = body.get("conditions", "{}")
+    try:
+        from backend.detection import validate_custom_rule_conditions
+        validated_cond = validate_custom_rule_conditions(conditions_raw, rule_id=rule_id)
+        conditions = json.dumps(validated_cond)
+    except Exception as exc:
+        return _err(f"Invalid rule conditions: {exc}", 400)
 
     conn = get_db()
     existing = repo.get_detection_rule(conn, rule_id)
@@ -1747,9 +2274,15 @@ def update_detection_rule(rule_id: str):
     enabled = body.get("enabled")
     threshold = body.get("threshold")
     window_minutes = body.get("window_minutes")
-    conditions = body.get("conditions")
-    if isinstance(conditions, dict):
-        conditions = json.dumps(conditions)
+    conditions_raw = body.get("conditions")
+    conditions = None
+    if conditions_raw is not None:
+        try:
+            from backend.detection import validate_custom_rule_conditions
+            validated_cond = validate_custom_rule_conditions(conditions_raw, rule_id=rule_id)
+            conditions = json.dumps(validated_cond)
+        except Exception as exc:
+            return _err(f"Invalid rule conditions: {exc}", 400)
     changed_by = (body.get("changed_by") or "SOC Analyst").strip()
 
     try:
@@ -2008,6 +2541,18 @@ ROUTE_DESCRIPTIONS = {
     "ingest_endpoint_events": "Ingest telemetry event batches from ThreatLens endpoint agents",
     "list_endpoint_events": "List and filter endpoint agent telemetry events",
     "get_endpoint_event_detail": "Retrieve endpoint event details by UUID",
+    "ingest_file_events": "Ingest normalized file-system telemetry events from endpoint collectors",
+    "list_file_events_route": "List and filter normalized file-system telemetry events",
+    "get_file_event_detail_route": "Retrieve details for a single file-system event by UUID",
+    "get_ransomware_config_route": "Retrieve active ransomware policy parameters, thresholds, and extension lists",
+    "update_ransomware_config_route": "Update validated burst thresholds, windows, or suspicious-extension policies",
+    "list_canaries_route": "List registered canary / honeyfiles with optional filtering",
+    "create_canary_route": "Register a new canary / honeyfile path",
+    "get_canary_detail_route": "Retrieve details for a single canary definition",
+    "update_canary_route": "Update an existing canary definition",
+    "delete_canary_route": "Delete a canary definition from the registry",
+    "analyze_ransomware_route": "Trigger on-demand evaluation of ransomware detection indicators",
+    "list_ransomware_alerts_route": "List recent ransomware alerts with attached file evidence",
 }
 
 ROUTE_SAMPLES = {
@@ -2015,6 +2560,13 @@ ROUTE_SAMPLES = {
     "/api/health": {"sample_path": "/api/health"},
     "/api/statistics": {"sample_path": "/api/statistics"},
     "/api/stats": {"sample_path": "/api/stats"},
+    "/api/v1/file-events": {"sample_path": "/api/v1/file-events?limit=5"},
+    "/api/v1/file-events/<event_id>": {"sample_path": "/api/v1/file-events/sample-uuid"},
+    "/api/v1/ransomware/config": {"sample_path": "/api/v1/ransomware/config"},
+    "/api/v1/canaries": {"sample_path": "/api/v1/canaries"},
+    "/api/v1/canaries/<canary_id>": {"sample_path": "/api/v1/canaries/canary-sample"},
+    "/api/v1/ransomware/analyze": {"sample_path": "/api/v1/ransomware/analyze"},
+    "/api/v1/ransomware/alerts": {"sample_path": "/api/v1/ransomware/alerts"},
     "/api/alerts": {"sample_path": "/api/alerts?limit=5"},
     "/api/alerts/<int:alert_id>": {
         "sample_path": "/api/alerts/1",
@@ -2094,6 +2646,8 @@ TEST_SUITE_NAMES = {
     "test_openssh_parser": "OpenSSH Auth Log Normalization & Parsing",
     "test_models": "Data Models & Schema Validation",
     "test_system_diagnostics": "System Diagnostics & Module B Isolation",
+    "test_file_events": "File-System Telemetry & Collector Ingestion",
+    "test_ransomware_detection": "Ransomware Behavior Detection & Policy Engine",
 }
 
 ALLOWLISTED_TEST_TARGETS = {
@@ -2108,6 +2662,8 @@ ALLOWLISTED_TEST_TARGETS = {
     "parser": "tests/test_openssh_parser.py",
     "models": "tests/test_models.py",
     "diagnostics": "tests/test_system_diagnostics.py",
+    "file_events": "tests/test_file_events.py",
+    "ransomware": "tests/test_ransomware_detection.py",
 }
 
 

@@ -22,6 +22,7 @@ Design notes
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from typing import Any, Dict, Optional, Tuple
 
@@ -220,6 +221,74 @@ CREATE INDEX IF NOT EXISTS idx_endpoint_events_timestamp ON endpoint_events(time
 CREATE INDEX IF NOT EXISTS idx_endpoint_events_source    ON endpoint_events(source);
 CREATE INDEX IF NOT EXISTS idx_endpoint_events_type      ON endpoint_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_endpoint_events_source_ip ON endpoint_events(source_ip);
+
+CREATE TABLE IF NOT EXISTS file_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id        TEXT    NOT NULL UNIQUE,        -- UUIDv4 string from agent
+    device_id       TEXT    NOT NULL,
+    timestamp       TEXT    NOT NULL,               -- ISO-8601 UTC
+    event_type      TEXT    NOT NULL CHECK(event_type IN ('file_created','file_modified','file_renamed','file_deleted')),
+    file_path       TEXT    NOT NULL,
+    file_extension  TEXT    NOT NULL DEFAULT '',
+    previous_path   TEXT    DEFAULT NULL,
+    process_name    TEXT    DEFAULT NULL,
+    process_id      INTEGER DEFAULT NULL,
+    source          TEXT    NOT NULL DEFAULT 'file_monitor',
+    severity        TEXT    NOT NULL DEFAULT 'informational'
+                            CHECK(severity IN ('informational','low','medium','high','critical')),
+    raw_event       TEXT,
+    attributes      TEXT    NOT NULL DEFAULT '{}',  -- JSON blob
+    received_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_events_path     ON file_events(file_path);
+CREATE INDEX IF NOT EXISTS idx_file_events_ext      ON file_events(file_extension);
+CREATE INDEX IF NOT EXISTS idx_file_events_time     ON file_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_file_events_type     ON file_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_file_events_device   ON file_events(device_id);
+
+CREATE TABLE IF NOT EXISTS canary_files (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    canary_id       TEXT    NOT NULL UNIQUE,
+    device_id       TEXT    DEFAULT NULL,
+    file_path       TEXT    NOT NULL,
+    description     TEXT    DEFAULT '',
+    severity        TEXT    NOT NULL DEFAULT 'high'
+                            CHECK(severity IN ('low','medium','high','critical')),
+    enabled         INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_canary_files_path   ON canary_files(file_path);
+CREATE INDEX IF NOT EXISTS idx_canary_files_device ON canary_files(device_id);
+CREATE INDEX IF NOT EXISTS idx_canary_files_id     ON canary_files(canary_id);
+
+CREATE TABLE IF NOT EXISTS alert_file_evidence (
+    alert_id        INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    file_event_id   INTEGER NOT NULL REFERENCES file_events(id) ON DELETE CASCADE,
+    PRIMARY KEY (alert_id, file_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_file_evidence_alert ON alert_file_evidence(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_file_evidence_file  ON alert_file_evidence(file_event_id);
+
+CREATE TABLE IF NOT EXISTS ransomware_policies (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_name                 TEXT    NOT NULL UNIQUE DEFAULT 'default',
+    burst_window_seconds        INTEGER NOT NULL DEFAULT 10,
+    burst_modify_threshold      INTEGER NOT NULL DEFAULT 50,
+    burst_rename_threshold      INTEGER NOT NULL DEFAULT 50,
+    burst_delete_threshold      INTEGER NOT NULL DEFAULT 50,
+    burst_combined_threshold    INTEGER NOT NULL DEFAULT 80,
+    suspicious_extensions       TEXT    NOT NULL DEFAULT '[]',
+    canary_enabled              INTEGER NOT NULL DEFAULT 1 CHECK(canary_enabled IN (0, 1)),
+    burst_enabled               INTEGER NOT NULL DEFAULT 1 CHECK(burst_enabled IN (0, 1)),
+    extension_enabled           INTEGER NOT NULL DEFAULT 1 CHECK(extension_enabled IN (0, 1)),
+    correlation_window_seconds  INTEGER NOT NULL DEFAULT 900,
+    dedupe_gap_seconds          INTEGER NOT NULL DEFAULT 300,
+    updated_at                  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 """
 
 
@@ -389,6 +458,119 @@ def migrate_database(conn: sqlite3.Connection) -> None:
             conn.commit()
         except Exception:
             pass
+
+    # 7. Ensure file_events table and indexes exist
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS file_events (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id        TEXT    NOT NULL UNIQUE,
+            device_id       TEXT    NOT NULL,
+            timestamp       TEXT    NOT NULL,
+            event_type      TEXT    NOT NULL CHECK(event_type IN ('file_created','file_modified','file_renamed','file_deleted')),
+            file_path       TEXT    NOT NULL,
+            file_extension  TEXT    NOT NULL DEFAULT '',
+            previous_path   TEXT    DEFAULT NULL,
+            process_name    TEXT    DEFAULT NULL,
+            process_id      INTEGER DEFAULT NULL,
+            source          TEXT    NOT NULL DEFAULT 'file_monitor',
+            severity        TEXT    NOT NULL DEFAULT 'informational'
+                                    CHECK(severity IN ('informational','low','medium','high','critical')),
+            raw_event       TEXT,
+            attributes      TEXT    NOT NULL DEFAULT '{}',
+            received_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_path     ON file_events(file_path)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_ext      ON file_events(file_extension)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_time     ON file_events(timestamp)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_type     ON file_events(event_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_file_events_device   ON file_events(device_id)")
+    conn.commit()
+
+    # 8. Ensure Phase 2 ransomware detection tables and policies exist
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS canary_files (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            canary_id       TEXT    NOT NULL UNIQUE,
+            device_id       TEXT    DEFAULT NULL,
+            file_path       TEXT    NOT NULL,
+            description     TEXT    DEFAULT '',
+            severity        TEXT    NOT NULL DEFAULT 'high'
+                                    CHECK(severity IN ('low','medium','high','critical')),
+            enabled         INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+            created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_canary_files_path   ON canary_files(file_path)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_canary_files_device ON canary_files(device_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_canary_files_id     ON canary_files(canary_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alert_file_evidence (
+            alert_id        INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+            file_event_id   INTEGER NOT NULL REFERENCES file_events(id) ON DELETE CASCADE,
+            PRIMARY KEY (alert_id, file_event_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_file_evidence_alert ON alert_file_evidence(alert_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_file_evidence_file  ON alert_file_evidence(file_event_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ransomware_policies (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            policy_name                 TEXT    NOT NULL UNIQUE DEFAULT 'default',
+            burst_window_seconds        INTEGER NOT NULL DEFAULT 10,
+            burst_modify_threshold      INTEGER NOT NULL DEFAULT 50,
+            burst_rename_threshold      INTEGER NOT NULL DEFAULT 50,
+            burst_delete_threshold      INTEGER NOT NULL DEFAULT 50,
+            burst_combined_threshold    INTEGER NOT NULL DEFAULT 80,
+            suspicious_extensions       TEXT    NOT NULL DEFAULT '[]',
+            canary_enabled              INTEGER NOT NULL DEFAULT 1 CHECK(canary_enabled IN (0, 1)),
+            burst_enabled               INTEGER NOT NULL DEFAULT 1 CHECK(burst_enabled IN (0, 1)),
+            extension_enabled           INTEGER NOT NULL DEFAULT 1 CHECK(extension_enabled IN (0, 1)),
+            correlation_window_seconds  INTEGER NOT NULL DEFAULT 900,
+            dedupe_gap_seconds          INTEGER NOT NULL DEFAULT 300,
+            updated_at                  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+    """)
+
+    # Seed default ransomware policy if table is empty
+    policy_count = conn.execute("SELECT COUNT(*) FROM ransomware_policies").fetchone()[0]
+    if policy_count == 0:
+        default_exts = json.dumps([".locked", ".crypto", ".enc", ".crypted", ".ransom", ".darkbit"])
+        conn.execute(
+            """INSERT INTO ransomware_policies
+               (policy_name, burst_window_seconds, burst_modify_threshold, burst_rename_threshold,
+                burst_delete_threshold, burst_combined_threshold, suspicious_extensions,
+                canary_enabled, burst_enabled, extension_enabled, correlation_window_seconds, dedupe_gap_seconds)
+               VALUES ('default', 10, 50, 50, 50, 80, ?, 1, 1, 1, 900, 300)""",
+            (default_exts,),
+        )
+
+    # Seed Phase 2 ransomware detection rules into detection_rules table if not present
+    rw_rules = [
+        ("RW-BURST-01", "File modification burst", "50+ file modifications within 10s on one endpoint", "high", 1, 50, 1, '{"event_type": "file_modified", "window_seconds": 10, "metric": "distinct_paths"}'),
+        ("RW-BURST-02", "File rename burst", "50+ file renames within 10s on one endpoint", "high", 1, 50, 1, '{"event_type": "file_renamed", "window_seconds": 10, "metric": "distinct_paths"}'),
+        ("RW-BURST-03", "File deletion burst", "50+ file deletions within 10s on one endpoint", "high", 1, 50, 1, '{"event_type": "file_deleted", "window_seconds": 10, "metric": "distinct_paths"}'),
+        ("RW-BURST-04", "Combined activity burst", "80+ distinct file events within 10s on one endpoint", "critical", 1, 80, 1, '{"event_type": "any", "window_seconds": 10, "metric": "distinct_paths"}'),
+        ("RW-CANARY-01", "Canary file tampering", "Modification, rename, deletion, or creation of a registered canary", "critical", 1, 1, 5, '{"canary_monitor": true}'),
+        ("RW-EXT-01", "Suspicious extension mutation", "File rename with known ransomware extension", "medium", 1, 1, 5, '{"suspicious_extensions": [".locked", ".crypto", ".enc", ".crypted", ".ransom", ".darkbit"]}'),
+    ]
+    for r_id, r_name, r_desc, r_sev, r_en, r_thresh, r_win, r_cond in rw_rules:
+        existing_rule = conn.execute("SELECT id FROM detection_rules WHERE rule_id = ?", (r_id,)).fetchone()
+        if not existing_rule:
+            conn.execute(
+                """INSERT INTO detection_rules (rule_id, name, description, severity, enabled, threshold, window_minutes, conditions)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (r_id, r_name, r_desc, r_sev, r_en, r_thresh, r_win, r_cond),
+            )
+            conn.execute(
+                """INSERT INTO rule_audit_log (rule_id, action, changed_by, details)
+                   VALUES (?, 'seed', 'System Default', ?)""",
+                (r_id, f"Initial ransomware rule seeded: {r_name} (threshold: {r_thresh}, window: {r_win}m)"),
+            )
+    conn.commit()
 
 
 def init_db(db_path: str = "threatlens.db") -> sqlite3.Connection:

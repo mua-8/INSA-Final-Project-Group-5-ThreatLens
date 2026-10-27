@@ -269,6 +269,57 @@ class DetectionConfig:
 
 
 @dataclass
+class FileMonitorConfig:
+    """Settings for Linux file-system monitoring collector."""
+
+    enabled: bool = False
+    monitored_paths: list[str] = field(default_factory=list)
+    excluded_paths: list[str] = field(default_factory=list)
+    excluded_extensions: list[str] = field(default_factory=list)
+    recursive: bool = False
+    max_events_per_poll: int = 500
+    follow_symlinks: bool = False  # Strictly False per safety policy
+
+    def validate(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ConfigValidationError(
+                f"monitoring.file_monitor.enabled must be a boolean, got: {self.enabled}",
+                field_name="monitoring.file_monitor.enabled",
+            )
+        if not isinstance(self.monitored_paths, list):
+            raise ConfigValidationError(
+                f"monitoring.file_monitor.monitored_paths must be a list of paths, got: {type(self.monitored_paths).__name__}",
+                field_name="monitoring.file_monitor.monitored_paths",
+            )
+        for p in self.monitored_paths:
+            if not isinstance(p, str) or not p.strip():
+                raise ConfigValidationError(
+                    "monitoring.file_monitor.monitored_paths entries must be non-empty strings",
+                    field_name="monitoring.file_monitor.monitored_paths",
+                )
+        if not isinstance(self.excluded_paths, list):
+            raise ConfigValidationError(
+                f"monitoring.file_monitor.excluded_paths must be a list, got: {type(self.excluded_paths).__name__}",
+                field_name="monitoring.file_monitor.excluded_paths",
+            )
+        if not isinstance(self.excluded_extensions, list):
+            raise ConfigValidationError(
+                f"monitoring.file_monitor.excluded_extensions must be a list, got: {type(self.excluded_extensions).__name__}",
+                field_name="monitoring.file_monitor.excluded_extensions",
+            )
+        if not isinstance(self.recursive, bool):
+            raise ConfigValidationError(
+                f"monitoring.file_monitor.recursive must be a boolean, got: {self.recursive}",
+                field_name="monitoring.file_monitor.recursive",
+            )
+        if not isinstance(self.max_events_per_poll, int) or self.max_events_per_poll <= 0:
+            raise ConfigValidationError(
+                f"monitoring.file_monitor.max_events_per_poll must be a positive integer, got: {self.max_events_per_poll}",
+                field_name="monitoring.file_monitor.max_events_per_poll",
+            )
+
+
+@dataclass
 class MonitoringConfig:
     """Monitoring and telemetry collection settings."""
 
@@ -276,6 +327,7 @@ class MonitoringConfig:
     enabled_collectors: list[str] = field(default_factory=list)
     linux: LinuxCollectorConfig = field(default_factory=LinuxCollectorConfig)
     windows: WindowsCollectorConfig = field(default_factory=WindowsCollectorConfig)
+    file_monitor: FileMonitorConfig = field(default_factory=FileMonitorConfig)
 
     def validate(self) -> None:
         if (
@@ -293,6 +345,7 @@ class MonitoringConfig:
             )
         self.linux.validate()
         self.windows.validate()
+        self.file_monitor.validate()
 
 
 @dataclass

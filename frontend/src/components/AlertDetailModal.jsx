@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { FaTimes, FaShieldAlt, FaClock, FaNetworkWired, FaCheckCircle, FaExclamationCircle, FaSearch, FaHistory, FaServer, FaUserCheck, FaFolderPlus, FaUserTag, FaStickyNote } from "react-icons/fa";
+import { FaTimes, FaShieldAlt, FaClock, FaNetworkWired, FaCheckCircle, FaExclamationCircle, FaSearch, FaHistory, FaServer, FaUserCheck, FaFolderPlus, FaUserTag, FaStickyNote, FaBiohazard, FaInfoCircle } from "react-icons/fa";
 import { SeverityBadge, StatusBadge } from "./Badges.jsx";
 import { formatTimestamp } from "../utils/normalize.js";
 import {
@@ -184,7 +184,11 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
 
   const currentStatus = details?.status || alert.status || "new";
   const evidenceList = details?.evidence || [];
+  const fileEvidenceList = details?.file_evidence || alert.fileEvidence || [];
   const targetHost = details?.target_host || alert.target_host || alert.targetHost || "server";
+  const ruleId = details?.rule_id || alert.ruleId || alert.rule_id || "";
+  const isRansomwareAlert = ruleId.startsWith("RW-") || fileEvidenceList.length > 0;
+  const settings = typeof details?.settings === "object" ? (details.settings || {}) : (typeof alert.settings === "object" ? (alert.settings || {}) : {});
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-fadeIn">
@@ -193,16 +197,28 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-slate-700/80 px-6 py-4 bg-slate-900/60">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-danger/15 text-danger ring-1 ring-danger/40">
-              <FaShieldAlt size={20} />
+            <div className={`flex h-10 w-10 items-center justify-center rounded-lg ring-1 ${
+              isRansomwareAlert
+                ? "bg-rose-500/15 text-rose-400 ring-rose-500/40"
+                : "bg-danger/15 text-danger ring-danger/40"
+            }`}>
+              {isRansomwareAlert ? <FaBiohazard size={20} /> : <FaShieldAlt size={20} />}
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-semibold text-accent uppercase tracking-wider">
-                  {details?.rule_id || alert.ruleId || "RULE"}
+                  {ruleId || "RULE"}
                 </span>
                 <span className="text-xs text-slate-500">•</span>
                 <span className="font-mono text-xs text-slate-400">Alert #{alert.id}</span>
+                {isRansomwareAlert && (
+                  <>
+                    <span className="text-xs text-slate-500">•</span>
+                    <span className="rounded bg-rose-500/20 px-2 py-0.5 text-[10px] font-bold text-rose-300 uppercase tracking-wider border border-rose-500/30">
+                      Ransomware Behavioral Threat
+                    </span>
+                  </>
+                )}
               </div>
               <h2 className="text-lg font-bold text-white">
                 {details?.rule_name || alert.type || "Security Alert"}
@@ -258,7 +274,11 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
             <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
               <div className="text-xs text-slate-400">Evidence Count</div>
               <div className="mt-1 font-mono text-xs font-semibold text-accent">
-                {loading ? "..." : `${evidenceList.length} Events`}
+                {loading
+                  ? "..."
+                  : fileEvidenceList.length > 0
+                    ? `${fileEvidenceList.length} File Events`
+                    : `${evidenceList.length} SSH Events`}
               </div>
             </div>
           </div>
@@ -291,6 +311,79 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               {details?.explanation || alert.explanation || details?.summary || alert.summary || "No automated explanation available for this alert."}
             </p>
           </div>
+
+          {/* Ransomware Blast Radius & Behavioral Summary (Phase 3) */}
+          {isRansomwareAlert && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-950/20 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <FaBiohazard className="text-rose-400" size={16} />
+                  <span className="text-xs font-bold uppercase tracking-wider text-rose-300">
+                    Ransomware Behavioral Threat Context
+                  </span>
+                </div>
+                <span className="font-mono text-[11px] rounded bg-rose-500/20 px-2 py-0.5 text-rose-300 border border-rose-500/40 font-semibold">
+                  Host: {targetHost}
+                </span>
+              </div>
+
+              {/* Burst / Config Metrics if available */}
+              {(settings.distinct_paths_count || settings.raw_event_count) && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-rose-500/20 text-xs">
+                  <div className="rounded bg-slate-900/60 p-2.5 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Distinct Affected Paths</div>
+                    <div className="font-mono font-bold text-rose-400 text-sm mt-0.5">
+                      {settings.distinct_paths_count}
+                    </div>
+                  </div>
+                  <div className="rounded bg-slate-900/60 p-2.5 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Raw Burst Events</div>
+                    <div className="font-mono font-bold text-amber-400 text-sm mt-0.5">
+                      {settings.raw_event_count}
+                    </div>
+                  </div>
+                  <div className="rounded bg-slate-900/60 p-2.5 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Burst Time Window</div>
+                    <div className="font-mono font-semibold text-slate-300 text-sm mt-0.5">
+                      {settings.window_seconds || 10}s
+                    </div>
+                  </div>
+                  <div className="rounded bg-slate-900/60 p-2.5 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Configured Threshold</div>
+                    <div className="font-mono font-semibold text-slate-300 text-sm mt-0.5">
+                      ≥ {settings.threshold || 50}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sample affected paths preview if available */}
+              {Array.isArray(settings.sample_paths) && settings.sample_paths.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-[11px] text-slate-400 font-medium">Sample Impacted File Paths:</div>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    {settings.sample_paths.map((p, idx) => (
+                      <span
+                        key={idx}
+                        className="font-mono text-[10px] bg-slate-900/90 px-2 py-0.5 rounded text-rose-200 border border-rose-500/25 max-w-xs truncate"
+                        title={p}
+                      >
+                        {p}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Notice explaining detection alert vs incident case */}
+              <div className="flex items-start gap-2 rounded bg-slate-900/60 p-2.5 text-[11px] text-slate-400 border border-slate-800/80">
+                <FaInfoCircle className="text-accent shrink-0 mt-0.5" />
+                <span>
+                  <strong className="text-slate-200">Alert vs Incident Distinction:</strong> This detection alert flags an isolated behavioral burst, canary trigger, or extension change. To coordinate multi-host remediation or retain evidence across endpoints, use the <strong className="text-indigo-400">"Escalate to Incident"</strong> action below.
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Triage Action Bar & Attribution */}
           <div className="rounded-lg border border-slate-700/70 bg-slate-800/60 p-4 space-y-3">
@@ -576,15 +669,147 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
           )}
 
           {/* Linked Evidence Section */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Supporting Authentication Evidence
-              </h3>
-              <span className="text-xs text-slate-400 font-mono">
-                {evidenceList.length} linked event{evidenceList.length === 1 ? "" : "s"}
-              </span>
-            </div>
+          <div className="space-y-4">
+            {/* Forensic File Evidence (Ransomware / File Telemetry) */}
+            {fileEvidenceList.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                      Forensic File Telemetry & Blast Radius
+                    </h3>
+                    <span className="rounded bg-rose-500/20 px-2 py-0.5 text-[10px] font-mono font-bold text-rose-400 border border-rose-500/30">
+                      {fileEvidenceList.length} file event{fileEvidenceList.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-400 font-mono">
+                    Host: <span className="text-emerald-400 font-semibold">{targetHost}</span>
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto rounded-lg border border-slate-700/60 bg-slate-900/60 max-h-64 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-700 bg-slate-900/90 text-slate-400 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 font-mono">#</th>
+                        <th className="px-3 py-2">Timestamp (UTC)</th>
+                        <th className="px-3 py-2">Action</th>
+                        <th className="px-3 py-2">Affected Path</th>
+                        <th className="px-3 py-2">Previous Path (Rename)</th>
+                        <th className="px-3 py-2">Process & PID</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 text-slate-300">
+                      {fileEvidenceList.map((fev, idx) => {
+                        const evType = fev.event_type || fev.eventType || "file_event";
+                        let typeColor = "bg-slate-700 text-slate-200 border-slate-600";
+                        if (evType === "file_modified") typeColor = "bg-amber-500/20 text-amber-300 border-amber-500/40";
+                        else if (evType === "file_renamed") typeColor = "bg-purple-500/20 text-purple-300 border-purple-500/40";
+                        else if (evType === "file_deleted") typeColor = "bg-rose-500/20 text-rose-300 border-rose-500/40";
+                        else if (evType === "file_created") typeColor = "bg-emerald-500/20 text-emerald-300 border-emerald-500/40";
+
+                        return (
+                          <tr key={fev.id || idx} className="hover:bg-slate-800/50">
+                            <td className="px-3 py-2 font-mono text-slate-500">{fev.id || idx + 1}</td>
+                            <td className="px-3 py-2 font-mono whitespace-nowrap text-slate-400">
+                              {formatTimestamp(fev.timestamp)}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              <span className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-medium border ${typeColor}`}>
+                                {evType}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs text-rose-200/90 break-all max-w-xs">
+                              {fev.file_path || fev.filePath || "-"}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs text-slate-400 break-all max-w-xs">
+                              {fev.previous_path || fev.previousPath ? (
+                                <span className="text-purple-300/80">from: {fev.previous_path || fev.previousPath}</span>
+                              ) : (
+                                <span className="text-slate-600">-</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-slate-300 whitespace-nowrap">
+                              {fev.process_name || fev.processName ? (
+                                <span>
+                                  {fev.process_name || fev.processName}
+                                  {(fev.process_id !== null && fev.process_id !== undefined) && (
+                                    <span className="text-slate-500 text-[10px]"> (PID: {fev.process_id})</span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-slate-600">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Supporting Authentication Evidence (SSH) */}
+            {evidenceList.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    Supporting Authentication Evidence (SSH)
+                  </h3>
+                  <span className="text-xs text-slate-400 font-mono">
+                    {evidenceList.length} linked event{evidenceList.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto rounded-lg border border-slate-700/60 bg-slate-900/60 max-h-60 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-700 bg-slate-900/90 text-slate-400 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 font-mono">#</th>
+                        <th className="px-3 py-2">Timestamp (UTC)</th>
+                        <th className="px-3 py-2">Event Type</th>
+                        <th className="px-3 py-2">Target Host</th>
+                        <th className="px-3 py-2">User</th>
+                        <th className="px-3 py-2">Outcome</th>
+                        <th className="px-3 py-2">Raw Log Record</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 text-slate-300">
+                      {evidenceList.map((ev, idx) => (
+                        <tr key={ev.id || idx} className="hover:bg-slate-800/50">
+                          <td className="px-3 py-2 font-mono text-slate-500">{ev.id || idx + 1}</td>
+                          <td className="px-3 py-2 font-mono whitespace-nowrap text-slate-400">
+                            {formatTimestamp(ev.timestamp)}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-accent">
+                            {ev.event_type || ev.eventType || "ssh_event"}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-slate-300">
+                            {ev.host || targetHost}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-white">{ev.username || "-"}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                ev.outcome === "failure" || ev.status === "failure"
+                                  ? "bg-danger/20 text-danger border border-danger/40"
+                                  : "bg-success/20 text-success border border-success/40"
+                              }`}
+                            >
+                              {ev.outcome || ev.status || "event"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 font-mono text-[11px] text-slate-300 break-all">
+                            {ev.raw_line || ev.rawLine || "-"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {loading && (
               <div className="py-8 text-center text-xs text-slate-400">
@@ -598,58 +823,9 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               </div>
             )}
 
-            {!loading && evidenceList.length === 0 && (
+            {!loading && fileEvidenceList.length === 0 && evidenceList.length === 0 && (
               <div className="rounded-lg border border-slate-700/60 bg-slate-900/30 p-6 text-center text-xs text-slate-500">
                 No direct evidence records attached to this alert.
-              </div>
-            )}
-
-            {!loading && evidenceList.length > 0 && (
-              <div className="overflow-x-auto rounded-lg border border-slate-700/60 bg-slate-900/60 max-h-60 overflow-y-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="border-b border-slate-700 bg-slate-900/90 text-slate-400 sticky top-0">
-                    <tr>
-                      <th className="px-3 py-2 font-mono">#</th>
-                      <th className="px-3 py-2">Timestamp (UTC)</th>
-                      <th className="px-3 py-2">Event Type</th>
-                      <th className="px-3 py-2">Target Host</th>
-                      <th className="px-3 py-2">User</th>
-                      <th className="px-3 py-2">Outcome</th>
-                      <th className="px-3 py-2">Raw Log Record</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800 text-slate-300">
-                    {evidenceList.map((ev, idx) => (
-                      <tr key={ev.id || idx} className="hover:bg-slate-800/50">
-                        <td className="px-3 py-2 font-mono text-slate-500">{ev.id || idx + 1}</td>
-                        <td className="px-3 py-2 font-mono whitespace-nowrap text-slate-400">
-                          {formatTimestamp(ev.timestamp)}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-accent">
-                          {ev.event_type || ev.eventType || "ssh_event"}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-slate-300">
-                          {ev.host || targetHost}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-white">{ev.username || "-"}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          <span
-                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                              ev.outcome === "failure" || ev.status === "failure"
-                                ? "bg-danger/20 text-danger border border-danger/40"
-                                : "bg-success/20 text-success border border-success/40"
-                            }`}
-                          >
-                            {ev.outcome || ev.status || "event"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 font-mono text-[11px] text-slate-300 break-all">
-                          {ev.raw_line || ev.rawLine || "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             )}
           </div>

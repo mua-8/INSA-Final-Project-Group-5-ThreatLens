@@ -186,7 +186,7 @@ def insert_alert(conn: sqlite3.Connection, alert: Dict[str, Any]) -> int:
             alert["rule_name"],
             alert["severity"],
             alert.get("status", "new"),
-            alert["source_ip"],
+            alert.get("source_ip") or "unknown",
             alert.get("target_host"),
             alert["first_seen"],
             alert["last_seen"],
@@ -722,6 +722,139 @@ def count_endpoint_events(conn: sqlite3.Connection) -> int:
 
 
 # --------------------------------------------------------------------------
+# file_events
+# --------------------------------------------------------------------------
+
+def insert_file_event(
+    conn: sqlite3.Connection,
+    event_id: str,
+    device_id: str,
+    timestamp: str,
+    event_type: str,
+    file_path: str,
+    file_extension: str = "",
+    previous_path: Optional[str] = None,
+    process_name: Optional[str] = None,
+    process_id: Optional[int] = None,
+    source: str = "file_monitor",
+    severity: str = "informational",
+    raw_event: Optional[str] = None,
+    attributes: str = "{}",
+) -> int:
+    """Insert a file-system event record. Returns the new integer row id."""
+    cur = conn.execute(
+        """INSERT INTO file_events
+           (event_id, device_id, timestamp, event_type, file_path, file_extension,
+            previous_path, process_name, process_id, source, severity, raw_event, attributes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            event_id,
+            device_id,
+            timestamp,
+            event_type,
+            file_path,
+            file_extension,
+            previous_path,
+            process_name,
+            process_id,
+            source,
+            severity,
+            raw_event,
+            attributes,
+        ),
+    )
+    return cur.lastrowid
+
+
+def get_file_event(conn: sqlite3.Connection, event_id: str) -> Optional[sqlite3.Row]:
+    """Retrieve a single file event by its unique event_id UUID."""
+    return conn.execute(
+        "SELECT * FROM file_events WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+
+
+def list_file_events(
+    conn: sqlite3.Connection,
+    device_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    file_path: Optional[str] = None,
+    file_extension: Optional[str] = None,
+    source: Optional[str] = None,
+    severity: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[sqlite3.Row]:
+    """Return filtered file events ordered chronologically descending."""
+    clauses, params = [], []
+    if device_id:
+        clauses.append("device_id = ?")
+        params.append(device_id.strip())
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type.strip())
+    if file_path:
+        clauses.append("file_path LIKE ?")
+        params.append(f"%{file_path.strip()}%")
+    if file_extension:
+        ext = file_extension.strip().lower()
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        clauses.append("file_extension = ?")
+        params.append(ext)
+    if source:
+        clauses.append("source = ?")
+        params.append(source.strip())
+    if severity:
+        clauses.append("severity = ?")
+        params.append(severity.strip().lower())
+    if since:
+        clauses.append("timestamp >= ?")
+        params.append(since)
+    if until:
+        clauses.append("timestamp <= ?")
+        params.append(until)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    return conn.execute(
+        f"SELECT * FROM file_events {where} ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?",
+        params,
+    ).fetchall()
+
+
+def count_file_events(
+    conn: sqlite3.Connection,
+    device_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    file_extension: Optional[str] = None,
+) -> int:
+    """Return total number of file events matching optional criteria."""
+    clauses, params = [], []
+    if device_id:
+        clauses.append("device_id = ?")
+        params.append(device_id.strip())
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type.strip())
+    if file_extension:
+        ext = file_extension.strip().lower()
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        clauses.append("file_extension = ?")
+        params.append(ext)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return conn.execute(
+        f"SELECT COUNT(*) FROM file_events {where}",
+        params,
+    ).fetchone()[0]
+
+
+
+# --------------------------------------------------------------------------
 # detection_rules & rule_audit_log
 # --------------------------------------------------------------------------
 
@@ -990,3 +1123,254 @@ def upsert_endpoint_from_event(conn: sqlite3.Connection, device_id: str,
                VALUES (?, ?, ?, 'active', ?, ?, ?)""",
             (clean_dev, default_host, os_guess, source_ip, timestamp, timestamp),
         )
+
+
+# --------------------------------------------------------------------------
+# Phase 2: Canary files, alert file evidence, and ransomware policies
+# --------------------------------------------------------------------------
+
+def insert_canary_file(
+    conn: sqlite3.Connection,
+    canary_id: str,
+    file_path: str,
+    device_id: Optional[str] = None,
+    description: str = "",
+    severity: str = "high",
+    enabled: int = 1,
+) -> int:
+    """Insert a designated canary/honeyfile record. Returns the new integer row id."""
+    clean_id = canary_id.strip()
+    clean_path = file_path.strip()
+    if not clean_id:
+        raise ValueError("canary_id must not be empty")
+    if not clean_path:
+        raise ValueError("file_path must not be empty")
+    valid_sev = {"low", "medium", "high", "critical"}
+    if severity.lower() not in valid_sev:
+        raise ValueError(f"severity must be one of {sorted(valid_sev)}")
+
+    cur = conn.execute(
+        """INSERT INTO canary_files
+           (canary_id, device_id, file_path, description, severity, enabled)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            clean_id,
+            device_id.strip() if device_id and device_id.strip() != "*" else None,
+            clean_path,
+            description.strip(),
+            severity.lower(),
+            1 if enabled else 0,
+        ),
+    )
+    return cur.lastrowid
+
+
+def get_canary_file(conn: sqlite3.Connection, canary_id: str) -> Optional[sqlite3.Row]:
+    """Retrieve a single canary record by its unique canary_id."""
+    return conn.execute(
+        "SELECT * FROM canary_files WHERE canary_id = ?",
+        (canary_id.strip(),),
+    ).fetchone()
+
+
+def list_canary_files(
+    conn: sqlite3.Connection,
+    device_id: Optional[str] = None,
+    enabled: Optional[int] = None,
+    search: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[sqlite3.Row]:
+    """Return filtered canary file records."""
+    clauses, params = [], []
+    if device_id is not None and device_id.strip() != "*":
+        clauses.append("(device_id = ? OR device_id IS NULL)")
+        params.append(device_id.strip())
+    if enabled is not None:
+        clauses.append("enabled = ?")
+        params.append(1 if enabled else 0)
+    if search:
+        clauses.append("(canary_id LIKE ? OR file_path LIKE ? OR description LIKE ?)")
+        term = f"%{search.strip()}%"
+        params.extend([term, term, term])
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    return conn.execute(
+        f"SELECT * FROM canary_files {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+        params,
+    ).fetchall()
+
+
+def update_canary_file(
+    conn: sqlite3.Connection,
+    canary_id: str,
+    file_path: Optional[str] = None,
+    device_id: Optional[str] = None,
+    description: Optional[str] = None,
+    severity: Optional[str] = None,
+    enabled: Optional[int] = None,
+) -> bool:
+    """Update mutable attributes of a registered canary file."""
+    updates, params = [], []
+    if file_path is not None:
+        if not file_path.strip():
+            raise ValueError("file_path must not be empty")
+        updates.append("file_path = ?")
+        params.append(file_path.strip())
+    if device_id is not None:
+        clean_dev = device_id.strip()
+        updates.append("device_id = ?")
+        params.append(None if clean_dev in ("", "*") else clean_dev)
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description.strip())
+    if severity is not None:
+        valid_sev = {"low", "medium", "high", "critical"}
+        if severity.lower() not in valid_sev:
+            raise ValueError(f"severity must be one of {sorted(valid_sev)}")
+        updates.append("severity = ?")
+        params.append(severity.lower())
+    if enabled is not None:
+        updates.append("enabled = ?")
+        params.append(1 if enabled else 0)
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
+    params.append(canary_id.strip())
+    cur = conn.execute(
+        f"UPDATE canary_files SET {', '.join(updates)} WHERE canary_id = ?",
+        params,
+    )
+    return cur.rowcount > 0
+
+
+def delete_canary_file(conn: sqlite3.Connection, canary_id: str) -> bool:
+    """Remove a canary file definition by canary_id."""
+    cur = conn.execute(
+        "DELETE FROM canary_files WHERE canary_id = ?",
+        (canary_id.strip(),),
+    )
+    return cur.rowcount > 0
+
+
+def insert_alert_file_evidence(
+    conn: sqlite3.Connection,
+    alert_id: int,
+    file_event_ids: List[int],
+) -> None:
+    """Link file events to an alert as evidence."""
+    conn.executemany(
+        "INSERT OR IGNORE INTO alert_file_evidence (alert_id, file_event_id) VALUES (?, ?)",
+        [(alert_id, fid) for fid in file_event_ids if fid],
+    )
+
+
+def get_alert_file_evidence(
+    conn: sqlite3.Connection,
+    alert_id: int,
+) -> List[sqlite3.Row]:
+    """Retrieve all file events linked as evidence to an alert."""
+    return conn.execute(
+        """SELECT fe.* FROM file_events fe
+           JOIN alert_file_evidence afe ON afe.file_event_id = fe.id
+           WHERE afe.alert_id = ?
+           ORDER BY fe.timestamp""",
+        (alert_id,),
+    ).fetchall()
+
+
+def get_ransomware_policy(
+    conn: sqlite3.Connection,
+    policy_name: str = "default",
+) -> Optional[sqlite3.Row]:
+    """Retrieve active ransomware policy parameters."""
+    return conn.execute(
+        "SELECT * FROM ransomware_policies WHERE policy_name = ?",
+        (policy_name,),
+    ).fetchone()
+
+
+def update_ransomware_policy(
+    conn: sqlite3.Connection,
+    policy_name: str = "default",
+    burst_window_seconds: Optional[int] = None,
+    burst_modify_threshold: Optional[int] = None,
+    burst_rename_threshold: Optional[int] = None,
+    burst_delete_threshold: Optional[int] = None,
+    burst_combined_threshold: Optional[int] = None,
+    suspicious_extensions: Optional[List[str]] = None,
+    canary_enabled: Optional[int] = None,
+    burst_enabled: Optional[int] = None,
+    extension_enabled: Optional[int] = None,
+    correlation_window_seconds: Optional[int] = None,
+    dedupe_gap_seconds: Optional[int] = None,
+) -> bool:
+    """Update policy thresholds, windows, or extension lists."""
+    updates, params = [], []
+    if burst_window_seconds is not None:
+        if burst_window_seconds <= 0:
+            raise ValueError("burst_window_seconds must be > 0")
+        updates.append("burst_window_seconds = ?")
+        params.append(burst_window_seconds)
+    if burst_modify_threshold is not None:
+        if burst_modify_threshold <= 0:
+            raise ValueError("burst_modify_threshold must be > 0")
+        updates.append("burst_modify_threshold = ?")
+        params.append(burst_modify_threshold)
+    if burst_rename_threshold is not None:
+        if burst_rename_threshold <= 0:
+            raise ValueError("burst_rename_threshold must be > 0")
+        updates.append("burst_rename_threshold = ?")
+        params.append(burst_rename_threshold)
+    if burst_delete_threshold is not None:
+        if burst_delete_threshold <= 0:
+            raise ValueError("burst_delete_threshold must be > 0")
+        updates.append("burst_delete_threshold = ?")
+        params.append(burst_delete_threshold)
+    if burst_combined_threshold is not None:
+        if burst_combined_threshold <= 0:
+            raise ValueError("burst_combined_threshold must be > 0")
+        updates.append("burst_combined_threshold = ?")
+        params.append(burst_combined_threshold)
+    if suspicious_extensions is not None:
+        if not isinstance(suspicious_extensions, list):
+            raise ValueError("suspicious_extensions must be a list of strings")
+        clean_exts = [
+            e.strip().lower() if e.strip().startswith(".") else f".{e.strip().lower()}"
+            for e in suspicious_extensions if isinstance(e, str) and e.strip()
+        ]
+        updates.append("suspicious_extensions = ?")
+        params.append(json.dumps(clean_exts))
+    if canary_enabled is not None:
+        updates.append("canary_enabled = ?")
+        params.append(1 if canary_enabled else 0)
+    if burst_enabled is not None:
+        updates.append("burst_enabled = ?")
+        params.append(1 if burst_enabled else 0)
+    if extension_enabled is not None:
+        updates.append("extension_enabled = ?")
+        params.append(1 if extension_enabled else 0)
+    if correlation_window_seconds is not None:
+        if correlation_window_seconds <= 0:
+            raise ValueError("correlation_window_seconds must be > 0")
+        updates.append("correlation_window_seconds = ?")
+        params.append(correlation_window_seconds)
+    if dedupe_gap_seconds is not None:
+        if dedupe_gap_seconds <= 0:
+            raise ValueError("dedupe_gap_seconds must be > 0")
+        updates.append("dedupe_gap_seconds = ?")
+        params.append(dedupe_gap_seconds)
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
+    params.append(policy_name)
+    cur = conn.execute(
+        f"UPDATE ransomware_policies SET {', '.join(updates)} WHERE policy_name = ?",
+        params,
+    )
+    return cur.rowcount > 0

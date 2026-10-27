@@ -11,6 +11,7 @@ from typing import Any
 
 from threatlens_agent import __version__
 from threatlens_agent.collectors.base import BaseCollector
+from threatlens_agent.collectors.file_monitor import LinuxFileMonitorCollector
 from threatlens_agent.collectors.linux_auth import LinuxAuthCollector
 from threatlens_agent.collectors.windows_event import WindowsEventLogCollector
 from threatlens_agent.config import AgentConfig
@@ -127,6 +128,14 @@ class ThreatLensAgent:
                         auto_commit=False,
                     )
                     self.collectors.append(collector)
+                if self.config.monitoring.file_monitor.enabled:
+                    if not enabled_cols or "file_monitor" in enabled_cols:
+                        file_collector = LinuxFileMonitorCollector(
+                            device_id=self.device_info.device_id,
+                            config=self.config.monitoring.file_monitor,
+                            hostname=self.device_info.hostname,
+                        )
+                        self.collectors.append(file_collector)
             elif self.device_info.os_family == "windows":
                 enabled_cols = self.config.monitoring.enabled_collectors
                 if not enabled_cols or "windows_event_log" in enabled_cols:
