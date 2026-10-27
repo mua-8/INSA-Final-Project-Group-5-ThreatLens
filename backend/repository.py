@@ -252,6 +252,59 @@ def get_alert_status_history(conn: sqlite3.Connection, alert_id: int) -> List[sq
     ).fetchall()
 
 
+def update_alert_assignee(conn: sqlite3.Connection, alert_id: int,
+                          assignee: Optional[str], actor: str = "SOC Analyst") -> bool:
+    """Assign or reassign an alert to an analyst. Records action in status audit history."""
+    clean_assignee = assignee.strip() if assignee else None
+    cur = conn.execute(
+        """UPDATE alerts SET assignee = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+           WHERE id = ?""",
+        (clean_assignee, alert_id),
+    )
+    if cur.rowcount > 0:
+        row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+        cur_status = row["status"] if row else "new"
+        conn.execute(
+            """INSERT INTO alert_status_history (alert_id, old_status, new_status, actor, reason)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                alert_id,
+                cur_status,
+                cur_status,
+                (actor or "SOC Analyst").strip(),
+                f"Assigned alert ownership to: {clean_assignee or 'Unassigned'}",
+            ),
+        )
+        return True
+    return False
+
+
+def insert_alert_note(conn: sqlite3.Connection, alert_id: int, note: str,
+                      author: str = "SOC Analyst") -> int:
+    """Add an investigation note to an alert."""
+    clean_note = note.strip()
+    if not clean_note:
+        raise ValueError("note must not be empty")
+    cur = conn.execute(
+        """INSERT INTO alert_notes (alert_id, author, note)
+           VALUES (?, ?, ?)""",
+        (alert_id, (author or "SOC Analyst").strip(), clean_note),
+    )
+    conn.execute(
+        "UPDATE alerts SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+        (alert_id,),
+    )
+    return cur.lastrowid
+
+
+def list_alert_notes(conn: sqlite3.Connection, alert_id: int) -> List[sqlite3.Row]:
+    """Return all investigation notes for an alert in chronological order."""
+    return conn.execute(
+        """SELECT * FROM alert_notes WHERE alert_id = ? ORDER BY created_at ASC, id ASC""",
+        (alert_id,),
+    ).fetchall()
+
+
 def get_alert(conn: sqlite3.Connection, alert_id: int) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
 
@@ -259,6 +312,7 @@ def get_alert(conn: sqlite3.Connection, alert_id: int) -> Optional[sqlite3.Row]:
 def list_alerts(conn: sqlite3.Connection, status: Optional[str] = None,
                 severity: Optional[str] = None, rule_id: Optional[str] = None,
                 source_ip: Optional[str] = None, target_host: Optional[str] = None,
+                assignee: Optional[str] = None,
                 limit: int = 100, offset: int = 0) -> List[sqlite3.Row]:
     clauses, params = [], []
     if status:
@@ -276,6 +330,9 @@ def list_alerts(conn: sqlite3.Connection, status: Optional[str] = None,
     if target_host:
         clauses.append("target_host = ?")
         params.append(target_host)
+    if assignee:
+        clauses.append("assignee = ?")
+        params.append(assignee)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params += [limit, offset]
     return conn.execute(
@@ -396,13 +453,13 @@ def get_alert_evidence(conn: sqlite3.Connection, alert_id: int) -> List[sqlite3.
 # --------------------------------------------------------------------------
 
 def insert_incident(conn: sqlite3.Connection, title: str, description: str = "",
-                    severity: str = "medium") -> int:
+                    severity: str = "medium", assignee: Optional[str] = None) -> int:
     valid_sev = {"low", "medium", "high", "critical"}
     if severity not in valid_sev:
         raise ValueError(f"severity must be one of {sorted(valid_sev)}")
     cur = conn.execute(
-        "INSERT INTO incidents (title, description, severity) VALUES (?, ?, ?)",
-        (title.strip(), description.strip(), severity),
+        "INSERT INTO incidents (title, description, severity, assignee) VALUES (?, ?, ?, ?)",
+        (title.strip(), description.strip(), severity, (assignee or "").strip() or None),
     )
     return cur.lastrowid
 
@@ -414,28 +471,92 @@ def get_incident(conn: sqlite3.Connection, incident_id: int) -> Optional[sqlite3
 
 
 def list_incidents(conn: sqlite3.Connection, status: Optional[str] = None,
+                   severity: Optional[str] = None, assignee: Optional[str] = None,
+                   search: Optional[str] = None,
                    limit: int = 50, offset: int = 0) -> List[sqlite3.Row]:
+    clauses, params = [], []
     if status:
-        return conn.execute(
-            "SELECT * FROM incidents WHERE status=? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-            (status, limit, offset),
-        ).fetchall()
+        clauses.append("status = ?")
+        params.append(status)
+    if severity:
+        clauses.append("severity = ?")
+        params.append(severity)
+    if assignee:
+        clauses.append("assignee = ?")
+        params.append(assignee)
+    if search:
+        clauses.append("(title LIKE ? OR description LIKE ?)")
+        term = f"%{search.strip()}%"
+        params.extend([term, term])
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
     return conn.execute(
-        "SELECT * FROM incidents ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-        (limit, offset),
+        f"SELECT * FROM incidents {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+        params,
     ).fetchall()
 
 
+def update_incident(conn: sqlite3.Connection, incident_id: int,
+                    title: Optional[str] = None, description: Optional[str] = None,
+                    severity: Optional[str] = None, status: Optional[str] = None,
+                    assignee: Optional[str] = None, close_reason: Optional[str] = None) -> bool:
+    updates, params = [], []
+    if title is not None:
+        if not title.strip():
+            raise ValueError("title must not be empty")
+        updates.append("title = ?")
+        params.append(title.strip())
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description.strip())
+    if severity is not None:
+        valid_sev = {"low", "medium", "high", "critical"}
+        if severity.lower() not in valid_sev:
+            raise ValueError(f"severity must be one of {sorted(valid_sev)}")
+        updates.append("severity = ?")
+        params.append(severity.lower())
+    if status is not None:
+        valid_status = {"open", "in_progress", "resolved", "closed"}
+        if status.lower() not in valid_status:
+            raise ValueError(f"status must be one of {sorted(valid_status)}")
+        updates.append("status = ?")
+        params.append(status.lower())
+    if assignee is not None:
+        updates.append("assignee = ?")
+        params.append(assignee.strip() or None)
+    if close_reason is not None:
+        updates.append("close_reason = ?")
+        params.append(close_reason.strip())
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
+    params.append(incident_id)
+    cur = conn.execute(
+        f"UPDATE incidents SET {', '.join(updates)} WHERE id = ?",
+        params,
+    )
+    return cur.rowcount > 0
+
+
 def update_incident_status(conn: sqlite3.Connection, incident_id: int,
-                            status: str) -> bool:
-    valid = {"open", "in_progress", "closed"}
+                            status: str, close_reason: Optional[str] = None) -> bool:
+    valid = {"open", "in_progress", "resolved", "closed"}
     if status not in valid:
         raise ValueError(f"status must be one of {sorted(valid)}")
-    cur = conn.execute(
-        """UPDATE incidents SET status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-           WHERE id=?""",
-        (status, incident_id),
-    )
+    if close_reason is not None:
+        cur = conn.execute(
+            """UPDATE incidents SET status = ?, close_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+               WHERE id = ?""",
+            (status, close_reason.strip(), incident_id),
+        )
+    else:
+        cur = conn.execute(
+            """UPDATE incidents SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+               WHERE id = ?""",
+            (status, incident_id),
+        )
     return cur.rowcount > 0
 
 
@@ -449,6 +570,14 @@ def link_alert_to_incident(conn: sqlite3.Connection, incident_id: int,
         "INSERT OR IGNORE INTO incident_alert (incident_id, alert_id) VALUES (?, ?)",
         (incident_id, alert_id),
     )
+
+
+def unlink_alert_from_incident(conn: sqlite3.Connection, incident_id: int,
+                               alert_id: int) -> bool:
+    cur1 = conn.execute("DELETE FROM incident_alerts WHERE incident_id = ? AND alert_id = ?", (incident_id, alert_id))
+    cur2 = conn.execute("DELETE FROM incident_alert WHERE incident_id = ? AND alert_id = ?", (incident_id, alert_id))
+    conn.execute("UPDATE incidents SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?", (incident_id,))
+    return (cur1.rowcount > 0 or cur2.rowcount > 0)
 
 
 def get_incident_alerts(conn: sqlite3.Connection, incident_id: int) -> List[sqlite3.Row]:
@@ -587,3 +716,262 @@ def list_endpoint_events(
 def count_endpoint_events(conn: sqlite3.Connection) -> int:
     """Return total number of endpoint events stored."""
     return conn.execute("SELECT COUNT(*) FROM endpoint_events").fetchone()[0]
+
+
+# --------------------------------------------------------------------------
+# detection_rules & rule_audit_log
+# --------------------------------------------------------------------------
+
+def list_detection_rules(conn: sqlite3.Connection, enabled: Optional[int] = None,
+                         severity: Optional[str] = None, search: Optional[str] = None) -> List[sqlite3.Row]:
+    """Retrieve all detection rules with optional enabled, severity, or search filter."""
+    clauses, params = [], []
+    if enabled is not None:
+        clauses.append("enabled = ?")
+        params.append(1 if enabled else 0)
+    if severity:
+        clauses.append("severity = ?")
+        params.append(severity.lower())
+    if search:
+        clauses.append("(rule_id LIKE ? OR name LIKE ? OR description LIKE ?)")
+        term = f"%{search.strip()}%"
+        params.extend([term, term, term])
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return conn.execute(
+        f"SELECT * FROM detection_rules {where} ORDER BY rule_id ASC",
+        params,
+    ).fetchall()
+
+
+def get_detection_rule(conn: sqlite3.Connection, rule_id: str) -> Optional[sqlite3.Row]:
+    """Retrieve a single detection rule by ID."""
+    return conn.execute(
+        "SELECT * FROM detection_rules WHERE rule_id = ?", (rule_id.strip().upper(),)
+    ).fetchone()
+
+
+def insert_detection_rule(conn: sqlite3.Connection, rule_id: str, name: str,
+                          description: str = "", severity: str = "medium",
+                          enabled: int = 1, threshold: int = 5,
+                          window_minutes: int = 5, conditions: str = "{}") -> int:
+    """Insert a new detection rule record. Returns new row id."""
+    clean_id = rule_id.strip().upper()
+    if not clean_id:
+        raise ValueError("rule_id must not be empty")
+    if not name.strip():
+        raise ValueError("name must not be empty")
+    valid_sev = {"low", "medium", "high", "critical"}
+    if severity.lower() not in valid_sev:
+        raise ValueError(f"severity must be one of {sorted(valid_sev)}")
+    if threshold < 1:
+        raise ValueError("threshold must be >= 1")
+    if window_minutes < 1:
+        raise ValueError("window_minutes must be >= 1")
+
+    cur = conn.execute(
+        """INSERT INTO detection_rules
+           (rule_id, name, description, severity, enabled, threshold, window_minutes, conditions)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (clean_id, name.strip(), description.strip(), severity.lower(),
+         1 if enabled else 0, threshold, window_minutes, conditions),
+    )
+    return cur.lastrowid
+
+
+def update_detection_rule(conn: sqlite3.Connection, rule_id: str,
+                          name: Optional[str] = None, description: Optional[str] = None,
+                          severity: Optional[str] = None, enabled: Optional[int] = None,
+                          threshold: Optional[int] = None, window_minutes: Optional[int] = None,
+                          conditions: Optional[str] = None) -> bool:
+    """Update detection rule parameters."""
+    clean_id = rule_id.strip().upper()
+    updates, params = [], []
+    if name is not None:
+        if not name.strip():
+            raise ValueError("name must not be empty")
+        updates.append("name = ?")
+        params.append(name.strip())
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description.strip())
+    if severity is not None:
+        valid_sev = {"low", "medium", "high", "critical"}
+        if severity.lower() not in valid_sev:
+            raise ValueError(f"severity must be one of {sorted(valid_sev)}")
+        updates.append("severity = ?")
+        params.append(severity.lower())
+    if enabled is not None:
+        updates.append("enabled = ?")
+        params.append(1 if enabled else 0)
+    if threshold is not None:
+        if threshold < 1:
+            raise ValueError("threshold must be >= 1")
+        updates.append("threshold = ?")
+        params.append(threshold)
+    if window_minutes is not None:
+        if window_minutes < 1:
+            raise ValueError("window_minutes must be >= 1")
+        updates.append("window_minutes = ?")
+        params.append(window_minutes)
+    if conditions is not None:
+        updates.append("conditions = ?")
+        params.append(conditions)
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
+    params.append(clean_id)
+    cur = conn.execute(
+        f"UPDATE detection_rules SET {', '.join(updates)} WHERE rule_id = ?",
+        params,
+    )
+    return cur.rowcount > 0
+
+
+def insert_rule_audit_log(conn: sqlite3.Connection, rule_id: str, action: str,
+                          changed_by: str = "SOC Analyst", details: str = "") -> int:
+    """Record an audit trail entry for rule creation, update, or status change."""
+    cur = conn.execute(
+        """INSERT INTO rule_audit_log (rule_id, action, changed_by, details)
+           VALUES (?, ?, ?, ?)""",
+        (rule_id.strip().upper(), action.strip(), (changed_by or "SOC Analyst").strip(), details.strip()),
+    )
+    return cur.lastrowid
+
+
+def list_rule_audit_logs(conn: sqlite3.Connection, rule_id: Optional[str] = None,
+                         limit: int = 50) -> List[sqlite3.Row]:
+    """Retrieve audit trail logs for rule modifications."""
+    if rule_id:
+        return conn.execute(
+            """SELECT * FROM rule_audit_log WHERE rule_id = ? ORDER BY changed_at DESC, id DESC LIMIT ?""",
+            (rule_id.strip().upper(), limit),
+        ).fetchall()
+    return conn.execute(
+        """SELECT * FROM rule_audit_log ORDER BY changed_at DESC, id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
+
+# --------------------------------------------------------------------------
+# endpoints fleet management
+# --------------------------------------------------------------------------
+
+def list_endpoints(conn: sqlite3.Connection, status: Optional[str] = None,
+                   os_type: Optional[str] = None, search: Optional[str] = None,
+                   limit: int = 100, offset: int = 0) -> List[sqlite3.Row]:
+    """List endpoint devices with telemetry summary and filters."""
+    clauses, params = [], []
+    if status:
+        clauses.append("status = ?")
+        params.append(status.lower())
+    if os_type:
+        clauses.append("os = ?")
+        params.append(os_type.lower())
+    if search:
+        clauses.append("(device_id LIKE ? OR hostname LIKE ? OR ip_address LIKE ?)")
+        term = f"%{search.strip()}%"
+        params.extend([term, term, term])
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    return conn.execute(
+        f"""SELECT e.*,
+                   (SELECT COUNT(*) FROM endpoint_events ee WHERE ee.device_id = e.device_id) AS event_count
+            FROM endpoints e
+            {where}
+            ORDER BY last_seen DESC
+            LIMIT ? OFFSET ?""",
+        params,
+    ).fetchall()
+
+
+def get_endpoint(conn: sqlite3.Connection, device_id: str) -> Optional[sqlite3.Row]:
+    """Retrieve a single endpoint record by device_id."""
+    return conn.execute(
+        """SELECT e.*,
+                  (SELECT COUNT(*) FROM endpoint_events ee WHERE ee.device_id = e.device_id) AS event_count
+           FROM endpoints e
+           WHERE e.device_id = ?""",
+        (device_id.strip(),),
+    ).fetchone()
+
+
+def insert_endpoint(conn: sqlite3.Connection, device_id: str, hostname: str,
+                    os: str = "linux", status: str = "enrolled",
+                    ip_address: Optional[str] = None, agent_version: str = "1.0.0",
+                    metadata: str = "{}") -> None:
+    """Enroll or register an endpoint record."""
+    valid_status = {"active", "disabled", "offline", "enrolled"}
+    clean_status = status.lower() if status.lower() in valid_status else "enrolled"
+    conn.execute(
+        """INSERT INTO endpoints
+           (device_id, hostname, os, status, ip_address, agent_version, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (device_id.strip(), hostname.strip(), os.strip().lower(), clean_status,
+         ip_address, agent_version, metadata),
+    )
+
+
+def update_endpoint_status(conn: sqlite3.Connection, device_id: str, status: str) -> bool:
+    """Update endpoint operational lifecycle status (e.g. active vs disabled)."""
+    valid_status = {"active", "disabled", "offline", "enrolled"}
+    if status.lower() not in valid_status:
+        raise ValueError(f"status must be one of {sorted(valid_status)}")
+    cur = conn.execute(
+        "UPDATE endpoints SET status = ? WHERE device_id = ?",
+        (status.lower(), device_id.strip()),
+    )
+    return cur.rowcount > 0
+
+
+def update_endpoint(conn: sqlite3.Connection, device_id: str,
+                    hostname: Optional[str] = None, status: Optional[str] = None,
+                    ip_address: Optional[str] = None, metadata: Optional[str] = None) -> bool:
+    """Update endpoint hostname, status, or metadata."""
+    updates, params = [], []
+    if hostname is not None:
+        updates.append("hostname = ?")
+        params.append(hostname.strip())
+    if status is not None:
+        valid_status = {"active", "disabled", "offline", "enrolled"}
+        if status.lower() not in valid_status:
+            raise ValueError(f"status must be one of {sorted(valid_status)}")
+        updates.append("status = ?")
+        params.append(status.lower())
+    if ip_address is not None:
+        updates.append("ip_address = ?")
+        params.append(ip_address.strip() or None)
+    if metadata is not None:
+        updates.append("metadata = ?")
+        params.append(metadata)
+
+    if not updates:
+        return False
+    params.append(device_id.strip())
+    cur = conn.execute(f"UPDATE endpoints SET {', '.join(updates)} WHERE device_id = ?", params)
+    return cur.rowcount > 0
+
+
+def upsert_endpoint_from_event(conn: sqlite3.Connection, device_id: str,
+                               timestamp: str, source: str,
+                               source_ip: Optional[str] = None,
+                               hostname: Optional[str] = None) -> None:
+    """Update or register an endpoint record when an agent reports an event."""
+    clean_dev = device_id.strip()
+    os_guess = "windows" if "win" in source.lower() else "linux"
+    cur = conn.execute(
+        """UPDATE endpoints
+           SET last_seen = MAX(last_seen, ?),
+               ip_address = COALESCE(?, ip_address)
+           WHERE device_id = ?""",
+        (timestamp, source_ip, clean_dev),
+    )
+    if cur.rowcount == 0:
+        default_host = hostname or f"{clean_dev[:8]}-host"
+        conn.execute(
+            """INSERT OR IGNORE INTO endpoints
+               (device_id, hostname, os, status, ip_address, last_seen, registered_at)
+               VALUES (?, ?, ?, 'active', ?, ?, ?)""",
+            (clean_dev, default_host, os_guess, source_ip, timestamp, timestamp),
+        )

@@ -6,7 +6,9 @@ import {
   getIncidents,
   getIncidentDetails,
   createIncident,
+  updateIncident,
   updateIncidentStatus,
+  unlinkAlertFromIncident,
   addIncidentNote,
 } from "../services/api.js";
 import {
@@ -20,6 +22,10 @@ import {
   FaUserEdit,
   FaExclamationTriangle,
   FaCheckCircle,
+  FaEdit,
+  FaTrash,
+  FaRedo,
+  FaUserTag,
 } from "react-icons/fa";
 
 export default function IncidentsView({ onRefreshDashboard }) {
@@ -38,11 +44,27 @@ export default function IncidentsView({ onRefreshDashboard }) {
   const [noteSubmitting, setNoteSubmitting] = useState(false);
   const [statusSubmitting, setStatusSubmitting] = useState(false);
 
+  // Edit incident state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editSeverity, setEditSeverity] = useState("high");
+  const [editAssignee, setEditAssignee] = useState("");
+  const [editStatus, setEditStatus] = useState("open");
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  // Close / Resolve with reason dialog state
+  const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [targetStatus, setTargetStatus] = useState("closed");
+  const [closeReason, setCloseReason] = useState("");
+  const [closeSubmitting, setCloseSubmitting] = useState(false);
+
   // New incident modal
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createTitle, setCreateTitle] = useState("");
   const [createSeverity, setCreateSeverity] = useState("high");
   const [createDesc, setCreateDesc] = useState("");
+  const [createAssignee, setCreateAssignee] = useState("");
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState(null);
 
@@ -68,7 +90,13 @@ export default function IncidentsView({ onRefreshDashboard }) {
     setDetailLoading(true);
     try {
       const res = await getIncidentDetails(id);
-      setSelectedIncident(res.data || res);
+      const inc = res.data || res;
+      setSelectedIncident(inc);
+      setEditTitle(inc.title || "");
+      setEditDesc(inc.description || "");
+      setEditSeverity(inc.severity || "high");
+      setEditAssignee(inc.assignee || "");
+      setEditStatus(inc.status || "open");
     } catch (err) {
       console.error("Failed to load incident detail:", err);
     } finally {
@@ -88,6 +116,66 @@ export default function IncidentsView({ onRefreshDashboard }) {
       alert("Failed to update incident status: " + err.message);
     } finally {
       setStatusSubmitting(false);
+    }
+  };
+
+  const openCloseDialog = (status) => {
+    setTargetStatus(status);
+    setCloseReason("");
+    setShowCloseDialog(true);
+  };
+
+  const handleConfirmClose = async (e) => {
+    e.preventDefault();
+    if (!selectedIncident?.id) return;
+    setCloseSubmitting(true);
+    try {
+      await updateIncidentStatus(selectedIncident.id, targetStatus, closeReason.trim());
+      setShowCloseDialog(false);
+      setCloseReason("");
+      await loadIncidentDetails(selectedIncident.id);
+      loadIncidents();
+      if (onRefreshDashboard) onRefreshDashboard();
+    } catch (err) {
+      alert("Failed to close/resolve incident: " + err.message);
+    } finally {
+      setCloseSubmitting(false);
+    }
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!selectedIncident?.id || !editTitle.trim()) return;
+    setEditSubmitting(true);
+    try {
+      await updateIncident(selectedIncident.id, {
+        title: editTitle.trim(),
+        description: editDesc.trim(),
+        severity: editSeverity,
+        status: editStatus,
+        assignee: editAssignee.trim() || null,
+      });
+      setIsEditing(false);
+      await loadIncidentDetails(selectedIncident.id);
+      loadIncidents();
+      if (onRefreshDashboard) onRefreshDashboard();
+    } catch (err) {
+      alert("Failed to update incident: " + err.message);
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  const handleUnlinkAlert = async (alertId) => {
+    if (!selectedIncident?.id || !alertId) return;
+    if (!window.confirm(`Unlink Alert #${alertId} from Incident #${selectedIncident.id}?`)) return;
+    try {
+      await unlinkAlertFromIncident(selectedIncident.id, alertId);
+      await loadIncidentDetails(selectedIncident.id);
+      loadIncidents();
+      if (onRefreshDashboard) onRefreshDashboard();
+    } catch (err) {
+      alert("Failed to unlink alert: " + err.message);
     }
   };
 
@@ -122,9 +210,11 @@ export default function IncidentsView({ onRefreshDashboard }) {
         title: createTitle.trim(),
         severity: createSeverity,
         description: createDesc.trim() || "Manual SOC investigation case",
+        assignee: createAssignee.trim() || null,
       });
       setCreateTitle("");
       setCreateDesc("");
+      setCreateAssignee("");
       setShowCreateModal(false);
       loadIncidents();
       if (onRefreshDashboard) onRefreshDashboard();
@@ -141,6 +231,7 @@ export default function IncidentsView({ onRefreshDashboard }) {
         search === "" ||
         (inc.title && inc.title.toLowerCase().includes(search.toLowerCase())) ||
         (inc.description && inc.description.toLowerCase().includes(search.toLowerCase())) ||
+        (inc.assignee && inc.assignee.toLowerCase().includes(search.toLowerCase())) ||
         String(inc.id).includes(search);
 
       const matchStatus =
@@ -191,6 +282,16 @@ export default function IncidentsView({ onRefreshDashboard }) {
       key: "status",
       label: "Lifecycle Status",
       render: (r) => <StatusBadge status={r.status} />,
+    },
+    {
+      key: "assignee",
+      label: "Assignee",
+      render: (r) => (
+        <span className="font-mono text-xs text-slate-300 flex items-center gap-1">
+          <FaUserTag size={10} className="text-accent/70" />
+          <span>{r.assignee || "Unassigned"}</span>
+        </span>
+      ),
     },
     {
       key: "actions",
@@ -310,19 +411,133 @@ export default function IncidentsView({ onRefreshDashboard }) {
                 </div>
               </div>
 
-              <button
-                onClick={() => setSelectedIncident(null)}
-                aria-label="Close dialog"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-700 hover:text-white"
-              >
-                <FaTimes size={16} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsEditing(!isEditing)}
+                  className="flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 border border-slate-700 hover:bg-slate-700 hover:text-white transition"
+                >
+                  <FaEdit size={11} className="text-accent" />
+                  <span>{isEditing ? "Cancel Edit" : "Edit Incident"}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedIncident(null);
+                    setIsEditing(false);
+                  }}
+                  aria-label="Close dialog"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-700 hover:text-white"
+                >
+                  <FaTimes size={16} />
+                </button>
+              </div>
             </div>
 
             {/* Body */}
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-              {/* Metadata */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+
+              {/* Edit Mode Form */}
+              {isEditing ? (
+                <form onSubmit={handleSaveEdit} className="rounded-lg border border-accent/40 bg-accent/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-700/60 pb-2">
+                    <h3 className="text-xs font-bold text-accent uppercase tracking-wider">
+                      Edit Incident Properties
+                    </h3>
+                    <span className="text-[11px] text-slate-400 font-mono">INC-#{selectedIncident.id}</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                        Incident Title *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        className="w-full rounded bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                        Severity
+                      </label>
+                      <select
+                        value={editSeverity}
+                        onChange={(e) => setEditSeverity(e.target.value)}
+                        className="w-full rounded bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                      >
+                        <option value="critical">Critical</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                        Lifecycle Status
+                      </label>
+                      <select
+                        value={editStatus}
+                        onChange={(e) => setEditStatus(e.target.value)}
+                        className="w-full rounded bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                      >
+                        <option value="open">Open</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="resolved">Resolved</option>
+                        <option value="closed">Closed</option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                        Assigned Analyst
+                      </label>
+                      <input
+                        type="text"
+                        value={editAssignee}
+                        onChange={(e) => setEditAssignee(e.target.value)}
+                        placeholder="e.g. analyst-1 or unassigned"
+                        className="w-full rounded bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:border-accent focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                        Case Description
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={editDesc}
+                        onChange={(e) => setEditDesc(e.target.value)}
+                        className="w-full rounded bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditing(false)}
+                      className="rounded bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={editSubmitting || !editTitle.trim()}
+                      className="rounded bg-accent px-4 py-1 text-xs font-bold text-primary hover:bg-sky-300 disabled:opacity-40"
+                    >
+                      {editSubmitting ? "Saving..." : "Save Changes"}
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+
+              {/* Metadata Cards */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                 <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
                   <div className="text-xs text-slate-400">Severity</div>
                   <div className="mt-1">
@@ -333,6 +548,13 @@ export default function IncidentsView({ onRefreshDashboard }) {
                   <div className="text-xs text-slate-400">Current Status</div>
                   <div className="mt-1">
                     <StatusBadge status={selectedIncident.status} />
+                  </div>
+                </div>
+                <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
+                  <div className="text-xs text-slate-400">Assigned Analyst</div>
+                  <div className="mt-1 font-mono text-xs font-semibold text-accent flex items-center gap-1 truncate">
+                    <FaUserTag size={10} className="text-accent/70 shrink-0" />
+                    <span className="truncate">{selectedIncident.assignee || "Unassigned"}</span>
                   </div>
                 </div>
                 <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
@@ -348,6 +570,14 @@ export default function IncidentsView({ onRefreshDashboard }) {
                   </div>
                 </div>
               </div>
+
+              {/* Close / Resolution Reason Display */}
+              {selectedIncident.close_reason && (
+                <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/20 p-3 text-xs">
+                  <span className="font-semibold text-emerald-400">Resolution / Closure Rationale: </span>
+                  <span className="text-slate-200">{selectedIncident.close_reason}</span>
+                </div>
+              )}
 
               {/* Status Update Bar */}
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700/60 bg-slate-800/60 p-3.5">
@@ -375,12 +605,29 @@ export default function IncidentsView({ onRefreshDashboard }) {
                     In Progress
                   </button>
                   <button
+                    disabled={statusSubmitting || selectedIncident.status === "resolved"}
+                    onClick={() => openCloseDialog("resolved")}
+                    className="rounded-lg bg-emerald-500/20 px-2.5 py-1 text-xs font-semibold text-emerald-300 border border-emerald-500/40 transition hover:bg-emerald-500/30 disabled:opacity-40"
+                  >
+                    Resolve Case
+                  </button>
+                  <button
                     disabled={statusSubmitting || selectedIncident.status === "closed"}
-                    onClick={() => handleStatusChange("closed")}
-                    className="rounded-lg bg-success/20 px-2.5 py-1 text-xs font-semibold text-success border border-success/40 transition hover:bg-success/30 disabled:opacity-40"
+                    onClick={() => openCloseDialog("closed")}
+                    className="rounded-lg bg-slate-700 px-2.5 py-1 text-xs font-semibold text-slate-300 border border-slate-600 transition hover:bg-slate-600 disabled:opacity-40"
                   >
                     Close Case
                   </button>
+                  {(selectedIncident.status === "closed" || selectedIncident.status === "resolved") && (
+                    <button
+                      disabled={statusSubmitting}
+                      onClick={() => handleStatusChange("open")}
+                      className="rounded-lg bg-indigo-500/20 px-2.5 py-1 text-xs font-semibold text-indigo-300 border border-indigo-500/40 transition hover:bg-indigo-500/30 disabled:opacity-40 inline-flex items-center gap-1"
+                    >
+                      <FaRedo size={10} />
+                      <span>Reopen</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -405,6 +652,14 @@ export default function IncidentsView({ onRefreshDashboard }) {
                         <div className="flex items-center gap-3">
                           <span className="font-mono text-slate-400">Host: {al.target_host || "server"}</span>
                           <SeverityBadge severity={al.severity} />
+                          <button
+                            type="button"
+                            onClick={() => handleUnlinkAlert(al.id)}
+                            className="rounded bg-danger/15 p-1.5 text-danger border border-danger/30 hover:bg-danger/25 transition text-xs"
+                            title="Unlink alert from this incident"
+                          >
+                            <FaTrash size={10} />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -479,12 +734,55 @@ export default function IncidentsView({ onRefreshDashboard }) {
 
             {/* Footer */}
             <div className="flex items-center justify-between border-t border-slate-700/80 px-6 py-3 bg-slate-900/60 text-xs text-slate-400">
-              <span>Incident #{selectedIncident.id}</span>
+              <span>Incident #{selectedIncident.id} • {selectedIncident.alerts?.length || 0} Linked Alerts</span>
               <button
-                onClick={() => setSelectedIncident(null)}
+                onClick={() => {
+                  setSelectedIncident(null);
+                  setIsEditing(false);
+                }}
                 className="rounded-lg bg-slate-700 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600"
               >
                 Close Case Window
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close / Resolve with Reason Dialog Modal */}
+      {showCloseDialog && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-5 space-y-3 shadow-2xl">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <FaCheckCircle className="text-accent" size={14} />
+              <span>{targetStatus === "resolved" ? "Resolve Incident Case" : "Close Incident Case"}</span>
+            </h3>
+            <p className="text-xs text-slate-400">
+              Please provide the resolution rationale, root-cause summary, or closure justification.
+            </p>
+            <textarea
+              rows={3}
+              required
+              value={closeReason}
+              onChange={(e) => setCloseReason(e.target.value)}
+              placeholder="e.g. Malicious IP blocked at perimeter firewall; credentials rotated."
+              className="w-full rounded bg-slate-950 border border-slate-700 p-2 text-xs text-slate-200 placeholder-slate-500 focus:border-accent focus:outline-none"
+            />
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowCloseDialog(false)}
+                className="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={closeSubmitting || !closeReason.trim()}
+                onClick={handleConfirmClose}
+                className="rounded bg-accent px-4 py-1.5 text-xs font-bold text-primary hover:bg-sky-300 disabled:opacity-40"
+              >
+                {closeSubmitting ? "Updating..." : "Confirm & Update"}
               </button>
             </div>
           </div>
@@ -529,20 +827,35 @@ export default function IncidentsView({ onRefreshDashboard }) {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Initial Severity
-                </label>
-                <select
-                  value={createSeverity}
-                  onChange={(e) => setCreateSeverity(e.target.value)}
-                  className="w-full rounded-lg bg-slate-900/80 border border-slate-700 px-3 py-2 text-xs text-slate-200 focus:border-accent focus:outline-none"
-                >
-                  <option value="critical">Critical</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Initial Severity
+                  </label>
+                  <select
+                    value={createSeverity}
+                    onChange={(e) => setCreateSeverity(e.target.value)}
+                    className="w-full rounded-lg bg-slate-900/80 border border-slate-700 px-3 py-2 text-xs text-slate-200 focus:border-accent focus:outline-none"
+                  >
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Assigned Analyst
+                  </label>
+                  <input
+                    type="text"
+                    value={createAssignee}
+                    onChange={(e) => setCreateAssignee(e.target.value)}
+                    placeholder="e.g. analyst-1"
+                    className="w-full rounded-lg bg-slate-900/80 border border-slate-700 px-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:border-accent focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div>

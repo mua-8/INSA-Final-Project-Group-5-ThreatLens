@@ -82,7 +82,9 @@ def index():
             "events": "GET /api/events",
             "alerts": "GET /api/alerts",
             "statistics": "GET /api/statistics",
-            "incidents": "GET /api/incidents"
+            "incidents": "GET /api/incidents",
+            "rules": "GET /api/rules",
+            "endpoints": "GET /api/endpoints"
         }
     })
 
@@ -398,6 +400,11 @@ def _int_param(name: str, default: int, min_val: int = 0, max_val: int = 10_000)
 
 
 def _ok(data, status: int = 200):
+    if isinstance(data, dict):
+        payload = dict(data)
+        payload["ok"] = True
+        payload["data"] = data
+        return jsonify(payload), status
     return jsonify({"ok": True, "data": data}), status
 
 
@@ -682,6 +689,13 @@ def ingest_endpoint_events():
                         username=rec["username"],
                         raw_event=rec["raw_event"],
                         attributes=json.dumps(rec["attributes"], sort_keys=True),
+                    )
+                    repo.upsert_endpoint_from_event(
+                        conn,
+                        device_id=rec["device_id"],
+                        timestamp=rec["timestamp"],
+                        source=rec["source"],
+                        source_ip=rec.get("source_ip"),
                     )
                     acknowledged_ids.append(rec["event_id"])
 
@@ -1068,6 +1082,7 @@ def list_alerts():
         rule_id=request.args.get("rule_id"),
         source_ip=request.args.get("source_ip"),
         target_host=request.args.get("target_host"),
+        assignee=request.args.get("assignee"),
         limit=limit,
         offset=offset,
     )
@@ -1088,16 +1103,51 @@ def get_alert(alert_id: int):
         return _err("Alert not found.", 404)
     evidence = repo.get_alert_evidence(conn, alert_id)
     history = repo.get_alert_status_history(conn, alert_id)
+    notes = repo.list_alert_notes(conn, alert_id)
     data = _row(alert)
     evidence_rows = _rows(evidence)
     data["evidence"] = evidence_rows
     data["status_history"] = _rows(history)
+    data["notes"] = _rows(notes)
     if not data.get("target_host"):
         data["target_host"] = next((ev.get("host") for ev in evidence_rows if ev.get("host")), None)
     return _ok(data)
 
 
 @app.route("/api/alerts/<int:alert_id>", methods=["PATCH"])
+def patch_alert(alert_id: int):
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    alert = repo.get_alert(conn, alert_id)
+    if alert is None:
+        return _err("Alert not found.", 404)
+
+    status = (body.get("status") or "").strip()
+    actor = (body.get("actor") or "SOC Analyst").strip() or "SOC Analyst"
+    reason = (body.get("reason") or "").strip()
+    has_assignee = "assignee" in body
+    assignee = body.get("assignee")
+
+    if not status and not has_assignee:
+        return _err("At least one of 'status' or 'assignee' is required.")
+
+    if status:
+        try:
+            repo.update_alert_status(conn, alert_id, status, actor=actor, reason=reason)
+        except ValueError as exc:
+            return _err(str(exc))
+
+    if has_assignee:
+        repo.update_alert_assignee(conn, alert_id, assignee, actor=actor)
+
+    conn.commit()
+    updated = repo.get_alert(conn, alert_id)
+    data = _row(updated)
+    data["status_history"] = _rows(repo.get_alert_status_history(conn, alert_id))
+    data["notes"] = _rows(repo.list_alert_notes(conn, alert_id))
+    return _ok(data)
+
+
 @app.route("/api/alerts/<int:alert_id>/status", methods=["PATCH"])
 def update_alert_status(alert_id: int):
     body = request.get_json(silent=True) or {}
@@ -1122,6 +1172,48 @@ def update_alert_status(alert_id: int):
         "reason": reason,
         "status_history": _rows(history),
     })
+
+
+@app.route("/api/alerts/<int:alert_id>/assign", methods=["PATCH", "POST"])
+def update_alert_assignee(alert_id: int):
+    body = request.get_json(silent=True) or {}
+    assignee = body.get("assignee")
+    actor = (body.get("actor") or "SOC Analyst").strip() or "SOC Analyst"
+    conn = get_db()
+    if repo.get_alert(conn, alert_id) is None:
+        return _err("Alert not found.", 404)
+    repo.update_alert_assignee(conn, alert_id, assignee, actor=actor)
+    conn.commit()
+    updated = repo.get_alert(conn, alert_id)
+    data = _row(updated)
+    data["status_history"] = _rows(repo.get_alert_status_history(conn, alert_id))
+    return _ok(data)
+
+
+@app.route("/api/alerts/<int:alert_id>/notes", methods=["POST"])
+def add_alert_note(alert_id: int):
+    body = request.get_json(silent=True) or {}
+    note = (body.get("note") or body.get("body") or "").strip()
+    if not note:
+        return _err("'note' field is required.")
+    if len(note) > 5000:
+        return _err("Note must be 5000 characters or fewer.")
+    author = (body.get("author") or "SOC Analyst").strip() or "SOC Analyst"
+    conn = get_db()
+    if repo.get_alert(conn, alert_id) is None:
+        return _err("Alert not found.", 404)
+    note_id = repo.insert_alert_note(conn, alert_id, note, author)
+    conn.commit()
+    return _ok({"note_id": note_id, "alert_id": alert_id, "author": author, "note": note}, 201)
+
+
+@app.route("/api/alerts/<int:alert_id>/notes", methods=["GET"])
+def list_alert_notes(alert_id: int):
+    conn = get_db()
+    if repo.get_alert(conn, alert_id) is None:
+        return _err("Alert not found.", 404)
+    notes = repo.list_alert_notes(conn, alert_id)
+    return _ok({"notes": _rows(notes), "count": len(notes)})
 
 
 @app.route("/api/alerts/<int:alert_id>/history", methods=["GET"])
@@ -1215,7 +1307,13 @@ def list_incidents():
         return _err(str(exc))
     conn = get_db()
     incidents = repo.list_incidents(
-        conn, status=request.args.get("status"), limit=limit, offset=offset
+        conn,
+        status=request.args.get("status"),
+        severity=request.args.get("severity"),
+        assignee=request.args.get("assignee"),
+        search=request.args.get("search"),
+        limit=limit,
+        offset=offset,
     )
     return _ok({"incidents": _rows(incidents), "count": len(incidents)})
 
@@ -1232,10 +1330,11 @@ def create_incident():
 
     description = (body.get("description") or "").strip()
     severity = (body.get("severity") or "medium").strip()
+    assignee = (body.get("assignee") or "").strip() or None
 
     conn = get_db()
     try:
-        incident_id = repo.insert_incident(conn, title, description, severity)
+        incident_id = repo.insert_incident(conn, title, description, severity, assignee=assignee)
         # Link selected alerts if provided
         alert_ids = body.get("alert_ids") or []
         if isinstance(alert_ids, list):
@@ -1246,7 +1345,6 @@ def create_incident():
         return _err(str(exc))
     conn.commit()
     return _ok({"incident_id": incident_id}, 201)
-
 
 
 @app.route("/api/incidents/<int:incident_id>", methods=["GET"])
@@ -1261,21 +1359,49 @@ def get_incident(incident_id: int):
     return _ok(data)
 
 
+@app.route("/api/incidents/<int:incident_id>", methods=["PATCH", "PUT"])
+def update_incident(incident_id: int):
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    if repo.get_incident(conn, incident_id) is None:
+        return _err("Incident not found.", 404)
+    try:
+        repo.update_incident(
+            conn,
+            incident_id,
+            title=body.get("title"),
+            description=body.get("description"),
+            severity=body.get("severity"),
+            status=body.get("status"),
+            assignee=body.get("assignee"),
+            close_reason=body.get("close_reason"),
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    conn.commit()
+    updated = repo.get_incident(conn, incident_id)
+    data = _row(updated)
+    data["alerts"] = _rows(repo.get_incident_alerts(conn, incident_id))
+    data["notes"] = _rows(repo.list_incident_notes(conn, incident_id))
+    return _ok(data)
+
+
 @app.route("/api/incidents/<int:incident_id>/status", methods=["PATCH"])
 def update_incident_status(incident_id: int):
     body = request.get_json(silent=True) or {}
     status = (body.get("status") or "").strip()
     if not status:
         return _err("'status' field is required.")
+    close_reason = (body.get("close_reason") or "").strip() or None
     conn = get_db()
     try:
-        found = repo.update_incident_status(conn, incident_id, status)
+        found = repo.update_incident_status(conn, incident_id, status, close_reason=close_reason)
     except ValueError as exc:
         return _err(str(exc))
     if not found:
         return _err("Incident not found.", 404)
     conn.commit()
-    return _ok({"incident_id": incident_id, "status": status})
+    return _ok({"incident_id": incident_id, "status": status, "close_reason": close_reason})
 
 
 @app.route("/api/incidents/<int:incident_id>/alerts", methods=["POST"])
@@ -1292,6 +1418,16 @@ def link_alert_to_incident(incident_id: int):
     repo.link_alert_to_incident(conn, incident_id, alert_id)
     conn.commit()
     return _ok({"incident_id": incident_id, "alert_id": alert_id}, 201)
+
+
+@app.route("/api/incidents/<int:incident_id>/alerts/<int:alert_id>", methods=["DELETE"])
+def unlink_alert_from_incident(incident_id: int, alert_id: int):
+    conn = get_db()
+    if repo.get_incident(conn, incident_id) is None:
+        return _err("Incident not found.", 404)
+    unlinked = repo.unlink_alert_from_incident(conn, incident_id, alert_id)
+    conn.commit()
+    return _ok({"incident_id": incident_id, "alert_id": alert_id, "unlinked": unlinked})
 
 
 @app.route("/api/incidents/<int:incident_id>/notes", methods=["POST"])
@@ -1326,25 +1462,351 @@ def list_incident_notes(incident_id: int):
 
 
 # --------------------------------------------------------------------------
+# Detection Rules CRUD & Management
+# --------------------------------------------------------------------------
+
+def _format_rule(r) -> dict:
+    d = _row(r)
+    if d and "enabled" in d:
+        d["enabled"] = bool(d["enabled"])
+    return d
+
+
+@app.route("/api/rules", methods=["GET"])
+def list_detection_rules():
+    conn = get_db()
+    severity = request.args.get("severity")
+    enabled_param = request.args.get("enabled")
+    enabled = None
+    if enabled_param is not None and enabled_param != "":
+        enabled = enabled_param.lower() in ("true", "1", "yes")
+    search = request.args.get("search")
+    rules = repo.list_detection_rules(conn, severity=severity, enabled=enabled, search=search)
+    rows = [_format_rule(r) for r in rules]
+    return _ok({"rules": rows, "count": len(rows)})
+
+
+@app.route("/api/rules/<rule_id>", methods=["GET"])
+def get_detection_rule(rule_id: str):
+    conn = get_db()
+    rule = repo.get_detection_rule(conn, rule_id)
+    if rule is None:
+        return _err("Rule not found.", 404)
+    data = _format_rule(rule)
+    data["audit_logs"] = _rows(repo.list_rule_audit_logs(conn, rule_id))
+    return _ok(data)
+
+
+@app.route("/api/rules", methods=["POST"])
+def create_detection_rule():
+    body = request.get_json(silent=True) or {}
+    rule_id = (body.get("rule_id") or "").strip().upper()
+    name = (body.get("name") or "").strip()
+    description = (body.get("description") or "").strip()
+    severity = (body.get("severity") or "medium").strip().lower()
+    enabled = bool(body.get("enabled", True))
+    changed_by = (body.get("changed_by") or "SOC Analyst").strip()
+
+    if not rule_id:
+        return _err("'rule_id' is required (e.g., DR-06).")
+    if not name:
+        return _err("'name' is required.")
+    valid_sev = {"low", "medium", "high", "critical"}
+    if severity not in valid_sev:
+        return _err(f"'severity' must be one of {sorted(valid_sev)}.")
+
+    try:
+        threshold = int(body.get("threshold", 5))
+        if threshold < 1:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return _err("'threshold' must be a positive integer >= 1.")
+
+    try:
+        window_minutes = int(body.get("window_minutes", 10))
+        if window_minutes < 1:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return _err("'window_minutes' must be a positive integer >= 1.")
+
+    conditions = body.get("conditions", "{}")
+    if isinstance(conditions, dict):
+        conditions = json.dumps(conditions)
+
+    conn = get_db()
+    existing = repo.get_detection_rule(conn, rule_id)
+    if existing:
+        return _err(f"Rule with ID '{rule_id}' already exists.", 409)
+
+    try:
+        repo.insert_detection_rule(
+            conn, rule_id=rule_id, name=name, description=description,
+            severity=severity, enabled=enabled, threshold=threshold,
+            window_minutes=window_minutes, conditions=conditions
+        )
+        repo.insert_rule_audit_log(
+            conn, rule_id=rule_id, action="create", changed_by=changed_by,
+            details=json.dumps({"name": name, "severity": severity, "threshold": threshold, "window_minutes": window_minutes})
+        )
+    except Exception as exc:
+        return _err(f"Failed to create detection rule: {exc}")
+    conn.commit()
+    created = repo.get_detection_rule(conn, rule_id)
+    return _ok(_format_rule(created), 201)
+
+
+@app.route("/api/rules/<rule_id>", methods=["PUT", "PATCH"])
+def update_detection_rule(rule_id: str):
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    rule = repo.get_detection_rule(conn, rule_id)
+    if rule is None:
+        return _err("Rule not found.", 404)
+
+    name = body.get("name")
+    description = body.get("description")
+    severity = body.get("severity")
+    enabled = body.get("enabled")
+    threshold = body.get("threshold")
+    window_minutes = body.get("window_minutes")
+    conditions = body.get("conditions")
+    if isinstance(conditions, dict):
+        conditions = json.dumps(conditions)
+    changed_by = (body.get("changed_by") or "SOC Analyst").strip()
+
+    try:
+        if threshold is not None:
+            threshold = int(threshold)
+            if threshold < 1:
+                return _err("'threshold' must be >= 1.")
+        if window_minutes is not None:
+            window_minutes = int(window_minutes)
+            if window_minutes < 1:
+                return _err("'window_minutes' must be >= 1.")
+
+        found = repo.update_detection_rule(
+            conn, rule_id=rule_id, name=name, description=description,
+            severity=severity, enabled=enabled, threshold=threshold,
+            window_minutes=window_minutes, conditions=conditions
+        )
+        if not found:
+            return _err("No changes made or rule not found.")
+
+        repo.insert_rule_audit_log(
+            conn, rule_id=rule_id, action="update", changed_by=changed_by,
+            details=json.dumps({k: v for k, v in body.items() if k != "changed_by"})
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    conn.commit()
+    updated = repo.get_detection_rule(conn, rule_id)
+    return _ok(_format_rule(updated))
+
+
+@app.route("/api/rules/<rule_id>/toggle", methods=["PATCH", "POST"])
+def toggle_detection_rule(rule_id: str):
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    rule = repo.get_detection_rule(conn, rule_id)
+    if rule is None:
+        return _err("Rule not found.", 404)
+
+    current_enabled = bool(rule["enabled"])
+    if "enabled" in body:
+        new_enabled = bool(body["enabled"])
+    else:
+        new_enabled = not current_enabled
+
+    changed_by = (body.get("changed_by") or "SOC Analyst").strip()
+    action = "enable" if new_enabled else "disable"
+
+    repo.update_detection_rule(conn, rule_id=rule_id, enabled=new_enabled)
+    repo.insert_rule_audit_log(
+        conn, rule_id=rule_id, action=action, changed_by=changed_by,
+        details=json.dumps({"enabled": new_enabled})
+    )
+    conn.commit()
+    updated = repo.get_detection_rule(conn, rule_id)
+    return _ok(_format_rule(updated))
+
+
+@app.route("/api/rules/<rule_id>/audit", methods=["GET"])
+def get_rule_audit_logs(rule_id: str):
+    conn = get_db()
+    if repo.get_detection_rule(conn, rule_id) is None:
+        return _err("Rule not found.", 404)
+    logs = repo.list_rule_audit_logs(conn, rule_id)
+    return _ok({"rule_id": rule_id, "audit_logs": _rows(logs), "count": len(logs)})
+
+
+# --------------------------------------------------------------------------
+# Endpoints Fleet Management
+# --------------------------------------------------------------------------
+
+@app.route("/api/endpoints", methods=["GET"])
+def list_endpoints():
+    conn = get_db()
+    status = request.args.get("status")
+    os_type = request.args.get("os")
+    search = request.args.get("search")
+    try:
+        limit = _int_param("limit", 100, 1, 1000)
+        offset = _int_param("offset", 0)
+    except ValueError as exc:
+        return _err(str(exc))
+
+    endpoints = repo.list_endpoints(
+        conn, status=status, os_type=os_type, search=search, limit=limit, offset=offset
+    )
+    rows = _rows(endpoints)
+    return _ok({"endpoints": rows, "count": len(rows)})
+
+
+@app.route("/api/endpoints/<device_id>", methods=["GET"])
+def get_endpoint(device_id: str):
+    conn = get_db()
+    endpoint = repo.get_endpoint(conn, device_id)
+    if endpoint is None:
+        return _err("Endpoint not found.", 404)
+    data = _row(endpoint)
+    recent_events = repo.list_endpoint_events(conn, device_id=device_id, limit=20)
+    data["recent_events"] = _rows(recent_events)
+    return _ok(data)
+
+
+@app.route("/api/endpoints", methods=["POST"])
+def enroll_endpoint():
+    body = request.get_json(silent=True) or {}
+    device_id = (body.get("device_id") or "").strip()
+    hostname = (body.get("hostname") or "").strip()
+    os_type = (body.get("os") or "linux").strip().lower()
+    status = (body.get("status") or "active").strip().lower()
+    ip_address = (body.get("ip_address") or "").strip() or None
+    agent_version = (body.get("agent_version") or "1.0.0").strip()
+    metadata = body.get("metadata", "{}")
+    if isinstance(metadata, dict):
+        metadata = json.dumps(metadata)
+
+    if not device_id:
+        return _err("'device_id' is required.")
+    if not hostname:
+        return _err("'hostname' is required.")
+
+    valid_os = {"linux", "windows", "macos"}
+    if os_type not in valid_os:
+        return _err(f"'os' must be one of {sorted(valid_os)}.")
+
+    conn = get_db()
+    existing = repo.get_endpoint(conn, device_id)
+    if existing:
+        return _err(f"Endpoint with device_id '{device_id}' is already registered.", 409)
+
+    try:
+        repo.insert_endpoint(
+            conn,
+            device_id=device_id,
+            hostname=hostname,
+            os=os_type,
+            status=status,
+            ip_address=ip_address,
+            agent_version=agent_version,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        return _err(f"Failed to enroll endpoint: {exc}")
+    conn.commit()
+    created = repo.get_endpoint(conn, device_id)
+    return _ok(_row(created), 201)
+
+
+@app.route("/api/endpoints/<device_id>", methods=["PATCH", "PUT"])
+def update_endpoint_details(device_id: str):
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    endpoint = repo.get_endpoint(conn, device_id)
+    if endpoint is None:
+        return _err("Endpoint not found.", 404)
+
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict):
+        metadata = json.dumps(metadata)
+
+    try:
+        found = repo.update_endpoint(
+            conn,
+            device_id=device_id,
+            hostname=body.get("hostname"),
+            status=body.get("status"),
+            ip_address=body.get("ip_address"),
+            metadata=metadata,
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    conn.commit()
+    updated = repo.get_endpoint(conn, device_id)
+    return _ok(_row(updated))
+
+
+@app.route("/api/endpoints/<device_id>/status", methods=["PATCH"])
+def update_endpoint_status(device_id: str):
+    body = request.get_json(silent=True) or {}
+    status = (body.get("status") or "").strip().lower()
+    if not status:
+        return _err("'status' field is required.")
+    valid_status = {"active", "disabled", "offline", "enrolled"}
+    if status not in valid_status:
+        return _err(f"'status' must be one of {sorted(valid_status)}.")
+
+    conn = get_db()
+    endpoint = repo.get_endpoint(conn, device_id)
+    if endpoint is None:
+        return _err("Endpoint not found.", 404)
+
+    try:
+        repo.update_endpoint_status(conn, device_id=device_id, status=status)
+    except ValueError as exc:
+        return _err(str(exc))
+    conn.commit()
+    return _ok({"device_id": device_id, "status": status})
+
+
+# --------------------------------------------------------------------------
 # System verification, testing & dynamic route discovery
 # --------------------------------------------------------------------------
 
 ROUTE_DESCRIPTIONS = {
     "index": "API Root - Pure JSON status and endpoint discovery",
-    "list_alerts": "List security alerts with filtering by severity, status, rule, or host",
-    "get_alert": "Get detailed alert record with correlated evidence",
+    "list_alerts": "List security alerts with filtering by severity, status, rule, host, or assignee",
+    "get_alert": "Get detailed alert record with correlated evidence, notes, and audit history",
     "update_alert_status": "Update alert triage status with analyst attribution and reason",
+    "patch_alert": "Update alert status or analyst assignment with audit trail",
+    "update_alert_assignee": "Assign or reassign an alert to an analyst",
+    "add_alert_note": "Add an analyst investigation note to an alert",
+    "list_alert_notes": "List analyst investigation notes for an alert",
     "get_alert_history": "Retrieve persistent audit trail of alert status transitions",
     "list_events": "List normalized security events with optional filtering",
     "get_event": "Get normalized event details and line hash",
     "health": "Production health check, WAL mode, and database telemetry",
-    "list_incidents": "List security incident cases",
-    "create_incident": "Create an incident from selected alerts",
+    "list_incidents": "List security incident cases with search, severity, and assignee filters",
+    "create_incident": "Create an incident from selected alerts and assign to analyst",
     "get_incident": "Retrieve incident details, linked alerts, and analyst notes",
+    "update_incident": "Update incident title, description, severity, status, assignee, or close reason",
+    "update_incident_status": "Update incident lifecycle status with optional close reason",
     "link_alert_to_incident": "Link a security alert to an incident case",
+    "unlink_alert_from_incident": "Unlink a security alert from an incident case",
     "add_incident_note": "Add an analyst case note to an incident",
     "list_incident_notes": "List analyst case notes for an incident",
-    "update_incident_status": "Update incident lifecycle status",
+    "list_detection_rules": "List SIEM detection rules with filtering by severity or status",
+    "get_detection_rule": "Retrieve detection rule details and modification audit trail",
+    "create_detection_rule": "Create a custom detection rule with threshold and window",
+    "update_detection_rule": "Update detection rule configuration and record audit log",
+    "toggle_detection_rule": "Enable or disable a detection rule without deleting alerts",
+    "get_rule_audit_logs": "Retrieve change audit log for a detection rule",
+    "list_endpoints": "List enrolled endpoint agent devices and operational health",
+    "get_endpoint": "Retrieve endpoint details and recent device telemetry",
+    "enroll_endpoint": "Register or enroll a new endpoint device",
+    "update_endpoint_details": "Update endpoint metadata and device properties",
+    "update_endpoint_status": "Update endpoint lifecycle status (active vs disabled)",
     "ingest": "Upload and parse raw syslog / auth log files",
     "list_logs": "List processed log files and verification hashes",
     "statistics": "Aggregated SOC counts, severity breakdown, and top source IPs",
@@ -1370,26 +1832,50 @@ ROUTE_SAMPLES = {
         "sample_path": "/api/alerts/1/status",
         "sample_body": {"status": "investigating", "actor": "SOC Analyst", "reason": "Verifying rule correlation"},
     },
+    "/api/alerts/<int:alert_id>/assign": {
+        "sample_path": "/api/alerts/1/assign",
+        "sample_body": {"assignee": "analyst-lead", "actor": "SOC Lead"},
+    },
+    "/api/alerts/<int:alert_id>/notes": {
+        "sample_path": "/api/alerts/1/notes",
+        "sample_body": {"note": "Investigating suspicious root login from internal workstation.", "author": "SOC Analyst"},
+    },
     "/api/alerts/<int:alert_id>/history": {"sample_path": "/api/alerts/1/history"},
     "/api/events": {"sample_path": "/api/events?limit=5"},
     "/api/events/<int:event_id>": {"sample_path": "/api/events/1"},
     "/api/logs": {"sample_path": "/api/logs"},
     "/api/incidents": {
         "sample_path": "/api/incidents",
-        "sample_body": {"title": "Suspicious Authentication Spike", "severity": "high", "description": "Investigating correlated brute-force alert."},
+        "sample_body": {"title": "Suspicious Authentication Spike", "severity": "high", "description": "Investigating correlated brute-force alert.", "assignee": "analyst-1"},
     },
     "/api/incidents/<int:incident_id>": {"sample_path": "/api/incidents/1"},
     "/api/incidents/<int:incident_id>/status": {
         "sample_path": "/api/incidents/1/status",
-        "sample_body": {"status": "investigating"},
+        "sample_body": {"status": "investigating", "close_reason": ""},
     },
     "/api/incidents/<int:incident_id>/alerts": {
         "sample_path": "/api/incidents/1/alerts",
         "sample_body": {"alert_id": 1},
     },
+    "/api/incidents/<int:incident_id>/alerts/<int:alert_id>": {
+        "sample_path": "/api/incidents/1/alerts/1",
+    },
     "/api/incidents/<int:incident_id>/notes": {
         "sample_path": "/api/incidents/1/notes",
         "sample_body": {"note": "Evidence verified against SSH daemon telemetry.", "author": "SOC Analyst"},
+    },
+    "/api/rules": {"sample_path": "/api/rules"},
+    "/api/rules/<rule_id>": {"sample_path": "/api/rules/DR-01"},
+    "/api/rules/<rule_id>/toggle": {
+        "sample_path": "/api/rules/DR-01/toggle",
+        "sample_body": {"enabled": True, "changed_by": "SOC Analyst"},
+    },
+    "/api/rules/<rule_id>/audit": {"sample_path": "/api/rules/DR-01/audit"},
+    "/api/endpoints": {"sample_path": "/api/endpoints"},
+    "/api/endpoints/<device_id>": {"sample_path": "/api/endpoints/endpoint-01"},
+    "/api/endpoints/<device_id>/status": {
+        "sample_path": "/api/endpoints/endpoint-01/status",
+        "sample_body": {"status": "active"},
     },
     "/api/v1/events": {
         "sample_path": "/api/v1/events?limit=5",

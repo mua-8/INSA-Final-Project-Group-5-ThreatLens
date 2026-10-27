@@ -10,6 +10,8 @@ import {
   FaChartBar,
   FaFolderOpen,
   FaDesktop,
+  FaSlidersH,
+  FaServer,
 } from "react-icons/fa";
 
 import Header from "../components/Header.jsx";
@@ -19,6 +21,8 @@ import AlertsTable from "../components/AlertsTable.jsx";
 import EventsTable from "../components/EventsTable.jsx";
 import EndpointTelemetryTable from "../components/EndpointTelemetryTable.jsx";
 import IncidentsView from "../components/IncidentsView.jsx";
+import DetectionRulesView from "../components/DetectionRulesView.jsx";
+import EndpointsView from "../components/EndpointsView.jsx";
 
 import AlertDetailModal from "../components/AlertDetailModal.jsx";
 import EventDetailModal from "../components/EventDetailModal.jsx";
@@ -224,6 +228,32 @@ export default function Dashboard() {
 
               <button
                 type="button"
+                onClick={() => setActiveTab("rules")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "rules"
+                    ? "bg-amber-600 text-white shadow-md shadow-amber-600/30"
+                    : "bg-slate-800/80 text-amber-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaSlidersH size={12} />
+                <span>Detection Rules</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("endpoints")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "endpoints"
+                    ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30"
+                    : "bg-slate-800/80 text-emerald-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaServer size={12} />
+                <span>Endpoint Fleet</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveTab("events")}
                 className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
                   activeTab === "events"
@@ -292,7 +322,21 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Tab 4: SSH Authentication Events */}
+            {/* Tab 4: Detection Rules Management View */}
+            {activeTab === "rules" && (
+              <div className="space-y-4 animate-fadeIn">
+                <DetectionRulesView />
+              </div>
+            )}
+
+            {/* Tab 5: Endpoint Fleet Management View */}
+            {activeTab === "endpoints" && (
+              <div className="space-y-4 animate-fadeIn">
+                <EndpointsView />
+              </div>
+            )}
+
+            {/* Tab 6: SSH Authentication Events */}
             {activeTab === "events" && (
               <div className="space-y-4 animate-fadeIn">
                 <EventsTable
@@ -302,7 +346,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Tab 5: Endpoint Agent Telemetry */}
+            {/* Tab 7: Endpoint Agent Telemetry */}
             {activeTab === "telemetry" && (
               <div className="space-y-4 animate-fadeIn">
                 {endpointError && (

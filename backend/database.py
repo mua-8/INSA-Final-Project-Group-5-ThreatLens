@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     summary     TEXT    NOT NULL,
     explanation TEXT    NOT NULL,
     settings    TEXT    NOT NULL DEFAULT '{}',  -- JSON blob
+    assignee    TEXT    DEFAULT NULL,           -- Assigned SOC analyst/owner
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
@@ -106,14 +107,26 @@ CREATE TABLE IF NOT EXISTS alert_status_history (
 
 CREATE INDEX IF NOT EXISTS idx_alert_history_alert_id ON alert_status_history(alert_id);
 
+CREATE TABLE IF NOT EXISTS alert_notes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id    INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    author      TEXT    NOT NULL DEFAULT 'SOC Analyst',
+    note        TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_notes_alert_id ON alert_notes(alert_id);
+
 CREATE TABLE IF NOT EXISTS incidents (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     title       TEXT    NOT NULL,
     description TEXT    NOT NULL DEFAULT '',
     status      TEXT    NOT NULL DEFAULT 'open'
-                        CHECK(status IN ('open','in_progress','closed')),
+                        CHECK(status IN ('open','in_progress','resolved','closed')),
     severity    TEXT    NOT NULL DEFAULT 'medium'
                         CHECK(severity IN ('low','medium','high','critical')),
+    assignee    TEXT    DEFAULT NULL,
+    close_reason TEXT   DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
@@ -142,6 +155,48 @@ CREATE TABLE IF NOT EXISTS incident_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_incident_notes_incident ON incident_notes(incident_id);
+
+CREATE TABLE IF NOT EXISTS detection_rules (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id         TEXT    NOT NULL UNIQUE,
+    name            TEXT    NOT NULL,
+    description     TEXT    NOT NULL DEFAULT '',
+    severity        TEXT    NOT NULL CHECK(severity IN ('low','medium','high','critical')),
+    enabled         INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    threshold       INTEGER NOT NULL DEFAULT 5,
+    window_minutes  INTEGER NOT NULL DEFAULT 5,
+    conditions      TEXT    NOT NULL DEFAULT '{}',  -- JSON blob for rule-specific config
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_detection_rules_rule_id ON detection_rules(rule_id);
+
+CREATE TABLE IF NOT EXISTS rule_audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id     TEXT    NOT NULL,
+    action      TEXT    NOT NULL,              -- 'create', 'update', 'enable', 'disable', 'seed'
+    changed_by  TEXT    NOT NULL DEFAULT 'SOC Analyst',
+    details     TEXT    NOT NULL DEFAULT '',
+    changed_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_audit_rule_id ON rule_audit_log(rule_id);
+
+CREATE TABLE IF NOT EXISTS endpoints (
+    device_id       TEXT    PRIMARY KEY,
+    hostname        TEXT    NOT NULL DEFAULT 'unknown-host',
+    os              TEXT    NOT NULL DEFAULT 'linux',
+    status          TEXT    NOT NULL DEFAULT 'active'
+                            CHECK(status IN ('active', 'disabled', 'offline', 'enrolled')),
+    ip_address      TEXT,
+    agent_version   TEXT    DEFAULT '1.0.0',
+    last_seen       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    registered_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    metadata        TEXT    NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_endpoints_status ON endpoints(status);
 
 CREATE TABLE IF NOT EXISTS endpoint_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,7 +240,7 @@ def get_connection(db_path: str = "threatlens.db") -> sqlite3.Connection:
 
 def migrate_database(conn: sqlite3.Connection) -> None:
     """Apply safe, backward-compatible incremental schema additions to existing databases."""
-    # 1. Add target_host column to alerts if missing
+    # 1. Add target_host and assignee columns to alerts if missing
     table_info = conn.execute("PRAGMA table_info(alerts)").fetchall()
     columns = {r["name"] for r in table_info}
     if "target_host" not in columns:
@@ -199,6 +254,10 @@ def migrate_database(conn: sqlite3.Connection) -> None:
                 LIMIT 1
             ) WHERE target_host IS NULL
         """)
+        conn.commit()
+
+    if "assignee" not in columns:
+        conn.execute("ALTER TABLE alerts ADD COLUMN assignee TEXT DEFAULT NULL")
         conn.commit()
 
     # 2. Ensure alert_status_history table and index exist
@@ -215,6 +274,121 @@ def migrate_database(conn: sqlite3.Connection) -> None:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_alert_id ON alert_status_history(alert_id)")
     conn.commit()
+
+    # 3. Ensure alert_notes table and index exist
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alert_notes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_id    INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+            author      TEXT    NOT NULL DEFAULT 'SOC Analyst',
+            note        TEXT    NOT NULL,
+            created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_notes_alert_id ON alert_notes(alert_id)")
+    conn.commit()
+
+    # 4. Check incidents columns (assignee, close_reason)
+    inc_info = conn.execute("PRAGMA table_info(incidents)").fetchall()
+    inc_cols = {r["name"] for r in inc_info}
+    if "assignee" not in inc_cols:
+        conn.execute("ALTER TABLE incidents ADD COLUMN assignee TEXT DEFAULT NULL")
+        conn.commit()
+    if "close_reason" not in inc_cols:
+        conn.execute("ALTER TABLE incidents ADD COLUMN close_reason TEXT DEFAULT ''")
+        conn.commit()
+
+    # 5. Ensure detection_rules and rule_audit_log exist and are seeded
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS detection_rules (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id         TEXT    NOT NULL UNIQUE,
+            name            TEXT    NOT NULL,
+            description     TEXT    NOT NULL DEFAULT '',
+            severity        TEXT    NOT NULL CHECK(severity IN ('low','medium','high','critical')),
+            enabled         INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+            threshold       INTEGER NOT NULL DEFAULT 5,
+            window_minutes  INTEGER NOT NULL DEFAULT 5,
+            conditions      TEXT    NOT NULL DEFAULT '{}',
+            created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_detection_rules_rule_id ON detection_rules(rule_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rule_audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id     TEXT    NOT NULL,
+            action      TEXT    NOT NULL,
+            changed_by  TEXT    NOT NULL DEFAULT 'SOC Analyst',
+            details     TEXT    NOT NULL DEFAULT '',
+            changed_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_audit_rule_id ON rule_audit_log(rule_id)")
+    conn.commit()
+
+    # Seed default rules if table is empty
+    rules_count = conn.execute("SELECT COUNT(*) FROM detection_rules").fetchone()[0]
+    if rules_count == 0:
+        default_rules = [
+            ("DR-01", "SSH brute force", "5+ failed logins from one IP in 5 min", "medium", 1, 5, 5, "{}"),
+            ("DR-02", "Username enumeration", "3+ distinct invalid usernames from one IP in 5 min", "medium", 1, 3, 5, "{}"),
+            ("DR-03", "Password spraying", "Failures against 5+ distinct users from one IP in 10 min", "high", 1, 5, 10, "{}"),
+            ("DR-04", "Success after failures", "Accepted login within 10 min of 5+ failures from same IP", "critical", 1, 5, 10, '{"failure_threshold": 5}'),
+            ("DR-05", "Root login attempt", "Any root attempt; accepted root escalates to high severity", "medium", 1, 1, 5, '{"usernames": ["root"], "accepted_severity": "high"}'),
+        ]
+        for r_id, r_name, r_desc, r_sev, r_en, r_thresh, r_win, r_cond in default_rules:
+            conn.execute(
+                """INSERT INTO detection_rules (rule_id, name, description, severity, enabled, threshold, window_minutes, conditions)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (r_id, r_name, r_desc, r_sev, r_en, r_thresh, r_win, r_cond),
+            )
+            conn.execute(
+                """INSERT INTO rule_audit_log (rule_id, action, changed_by, details)
+                   VALUES (?, 'seed', 'System Default', ?)""",
+                (r_id, f"Initial system rule seeded: {r_name} (threshold: {r_thresh}, window: {r_win}m)"),
+            )
+        conn.commit()
+
+    # 6. Ensure endpoints table exists and populate from endpoint_events if needed
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS endpoints (
+            device_id       TEXT    PRIMARY KEY,
+            hostname        TEXT    NOT NULL DEFAULT 'unknown-host',
+            os              TEXT    NOT NULL DEFAULT 'linux',
+            status          TEXT    NOT NULL DEFAULT 'active'
+                                    CHECK(status IN ('active', 'disabled', 'offline', 'enrolled')),
+            ip_address      TEXT,
+            agent_version   TEXT    DEFAULT '1.0.0',
+            last_seen       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            registered_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            metadata        TEXT    NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_status ON endpoints(status)")
+    conn.commit()
+
+    ep_count = conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0]
+    if ep_count == 0:
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO endpoints (device_id, hostname, os, status, ip_address, last_seen, registered_at)
+                SELECT 
+                    device_id,
+                    'kali-endpoint',
+                    'linux',
+                    'active',
+                    COALESCE(MAX(source_ip), '127.0.0.1'),
+                    MAX(timestamp),
+                    MIN(timestamp)
+                FROM endpoint_events
+                GROUP BY device_id
+            """)
+            conn.commit()
+        except Exception:
+            pass
 
 
 def init_db(db_path: str = "threatlens.db") -> sqlite3.Connection:
@@ -244,7 +418,8 @@ def get_database_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
     table_counts = {}
     for tbl in [
         "log_files", "events", "alerts", "alert_evidence",
-        "alert_status_history", "incidents", "incident_notes", "endpoint_events"
+        "alert_status_history", "alert_notes", "incidents", "incident_notes",
+        "detection_rules", "rule_audit_log", "endpoints", "endpoint_events"
     ]:
         try:
             row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()

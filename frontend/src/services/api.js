@@ -35,6 +35,21 @@ export const updateAlertStatus = async (id, status, actor = "SOC Analyst", reaso
   return res.data;
 };
 
+export const updateAlertAssignee = async (id, assignee, actor = "SOC Analyst") => {
+  const res = await client.patch(`/api/alerts/${id}/assign`, { assignee, actor });
+  return res.data;
+};
+
+export const addAlertNote = async (id, note, author = "SOC Analyst") => {
+  const res = await client.post(`/api/alerts/${id}/notes`, { note, author });
+  return res.data;
+};
+
+export const getAlertNotes = async (id) => {
+  const res = await client.get(`/api/alerts/${id}/notes`);
+  return res.data;
+};
+
 export const getAlertHistory = async (id) => {
   const res = await client.get(`/api/alerts/${id}/history`);
   return res.data;
@@ -63,8 +78,8 @@ export const ingestLog = async (logData, filename = "upload.log") => {
   return res.data;
 };
 
-export const getIncidents = async () => {
-  const res = await client.get("/api/incidents");
+export const getIncidents = async (params = {}) => {
+  const res = await client.get("/api/incidents", { params });
   return res.data;
 };
 
@@ -78,8 +93,18 @@ export const createIncident = async (payload) => {
   return res.data;
 };
 
-export const updateIncidentStatus = async (id, status) => {
-  const res = await client.patch(`/api/incidents/${id}/status`, { status });
+export const updateIncident = async (id, payload) => {
+  const res = await client.patch(`/api/incidents/${id}`, payload);
+  return res.data;
+};
+
+export const updateIncidentStatus = async (id, status, closeReason = "") => {
+  const res = await client.patch(`/api/incidents/${id}/status`, { status, close_reason: closeReason });
+  return res.data;
+};
+
+export const unlinkAlertFromIncident = async (incidentId, alertId) => {
+  const res = await client.delete(`/api/incidents/${incidentId}/alerts/${alertId}`);
   return res.data;
 };
 
@@ -90,6 +115,63 @@ export const addIncidentNote = async (id, note, author = "SOC Analyst") => {
 
 export const getIncidentNotes = async (id) => {
   const res = await client.get(`/api/incidents/${id}/notes`);
+  return res.data;
+};
+
+// Detection Rules CRUD & Management
+export const getDetectionRules = async (params = {}) => {
+  const res = await client.get("/api/rules", { params });
+  return res.data;
+};
+
+export const getDetectionRule = async (ruleId) => {
+  const res = await client.get(`/api/rules/${ruleId}`);
+  return res.data;
+};
+
+export const createDetectionRule = async (payload) => {
+  const res = await client.post("/api/rules", payload);
+  return res.data;
+};
+
+export const updateDetectionRule = async (ruleId, payload) => {
+  const res = await client.patch(`/api/rules/${ruleId}`, payload);
+  return res.data;
+};
+
+export const toggleDetectionRule = async (ruleId, enabled, changedBy = "SOC Analyst") => {
+  const res = await client.patch(`/api/rules/${ruleId}/toggle`, { enabled, changed_by: changedBy });
+  return res.data;
+};
+
+export const getRuleAuditLogs = async (ruleId) => {
+  const res = await client.get(`/api/rules/${ruleId}/audit`);
+  return res.data;
+};
+
+// Endpoints Fleet Management
+export const getEndpoints = async (params = {}) => {
+  const res = await client.get("/api/endpoints", { params });
+  return res.data;
+};
+
+export const getEndpointDetails = async (deviceId) => {
+  const res = await client.get(`/api/endpoints/${deviceId}`);
+  return res.data;
+};
+
+export const enrollEndpoint = async (payload) => {
+  const res = await client.post("/api/endpoints", payload);
+  return res.data;
+};
+
+export const updateEndpoint = async (deviceId, payload) => {
+  const res = await client.patch(`/api/endpoints/${deviceId}`, payload);
+  return res.data;
+};
+
+export const updateEndpointStatus = async (deviceId, status) => {
+  const res = await client.patch(`/api/endpoints/${deviceId}/status`, { status });
   return res.data;
 };
 

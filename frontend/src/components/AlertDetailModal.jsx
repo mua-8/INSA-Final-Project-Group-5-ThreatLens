@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { FaTimes, FaShieldAlt, FaClock, FaNetworkWired, FaCheckCircle, FaExclamationCircle, FaSearch, FaHistory, FaServer, FaUserCheck, FaFolderPlus } from "react-icons/fa";
+import { FaTimes, FaShieldAlt, FaClock, FaNetworkWired, FaCheckCircle, FaExclamationCircle, FaSearch, FaHistory, FaServer, FaUserCheck, FaFolderPlus, FaUserTag, FaStickyNote } from "react-icons/fa";
 import { SeverityBadge, StatusBadge } from "./Badges.jsx";
 import { formatTimestamp } from "../utils/normalize.js";
-import { getAlertDetails, updateAlertStatus, getAlertHistory, createIncident } from "../services/api.js";
+import {
+  getAlertDetails,
+  updateAlertStatus,
+  getAlertHistory,
+  createIncident,
+  updateAlertAssignee,
+  addAlertNote,
+} from "../services/api.js";
 
 export default function AlertDetailModal({ alert, onClose, onRefresh }) {
   const [details, setDetails] = useState(null);
@@ -13,6 +20,12 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
   const [actor, setActor] = useState("SOC Analyst");
   const [reason, setReason] = useState("");
   const [statusHistory, setStatusHistory] = useState([]);
+  const [assignee, setAssignee] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [notes, setNotes] = useState([]);
+  const [newNote, setNewNote] = useState("");
+  const [noteAuthor, setNoteAuthor] = useState("SOC Analyst");
+  const [noteSubmitting, setNoteSubmitting] = useState(false);
 
   // Escalation state
   const [showEscalate, setShowEscalate] = useState(false);
@@ -32,6 +45,8 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
         if (!mounted) return;
         const alertData = res.data || res;
         setDetails(alertData);
+        setAssignee(alertData.assignee || alert.assignee || "");
+        setNotes(alertData.notes || []);
         if (alertData.status_history) {
           setStatusHistory(alertData.status_history);
         } else {
@@ -57,6 +72,54 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
       mounted = false;
     };
   }, [alert]);
+
+  const handleAssign = async (e) => {
+    if (e) e.preventDefault();
+    if (!alert || !alert.id) return;
+    setAssigning(true);
+    setFeedback("");
+    try {
+      const res = await updateAlertAssignee(alert.id, assignee.trim(), actor);
+      const resData = res.data || res;
+      setDetails((prev) => ({ ...prev, assignee: resData.assignee }));
+      if (resData.status_history) {
+        setStatusHistory(resData.status_history);
+      }
+      setFeedback(assignee.trim() ? `Alert assigned to "${assignee.trim()}".` : "Alert unassigned.");
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setFeedback(`Error assigning alert: ${err.message}`);
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const handleAddNote = async (e) => {
+    e.preventDefault();
+    if (!newNote.trim() || !alert?.id) return;
+    setNoteSubmitting(true);
+    setFeedback("");
+    try {
+      const res = await addAlertNote(alert.id, newNote.trim(), noteAuthor.trim() || actor);
+      const resData = res.data || res;
+      setNotes((prev) => [
+        {
+          id: resData.note_id || Date.now(),
+          alert_id: alert.id,
+          author: noteAuthor.trim() || actor,
+          note: newNote.trim(),
+          created_at: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+      setNewNote("");
+      setFeedback("Investigation note added successfully.");
+    } catch (err) {
+      setFeedback(`Error adding note: ${err.message}`);
+    } finally {
+      setNoteSubmitting(false);
+    }
+  };
 
   const handleStatusChange = async (newStatus) => {
     if (!alert || !alert.id) return;
@@ -159,7 +222,7 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           
           {/* Metadata Cards */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
               <div className="text-xs text-slate-400">Severity</div>
               <div className="mt-1">
@@ -183,6 +246,13 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               <div className="text-xs text-slate-400">Source IP</div>
               <div className="mt-1 font-mono text-xs font-semibold text-white">
                 {details?.source_ip || alert.sourceIp || "-"}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
+              <div className="text-xs text-slate-400">Assigned Analyst</div>
+              <div className="mt-1 flex items-center gap-1.5 font-mono text-xs font-semibold text-accent truncate" title={details?.assignee || alert.assignee || "Unassigned"}>
+                <FaUserTag size={11} className="text-accent/70 shrink-0" />
+                <span className="truncate">{details?.assignee || alert.assignee || "Unassigned"}</span>
               </div>
             </div>
             <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
@@ -227,10 +297,10 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                  Alert Lifecycle Triage
+                  Alert Lifecycle Triage & Assignment
                 </h4>
                 <p className="text-xs text-slate-400">
-                  Update alert status with analyst attribution and audit trail tracking.
+                  Update alert status, assign to analysts, and maintain full audit accountability.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -266,11 +336,33 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               </div>
             </div>
 
-            {/* Analyst & Reason Inputs */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-700/60">
+            {/* Analyst Assignment & Attribution Inputs */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-700/60">
               <div>
                 <label className="block text-[11px] font-medium text-slate-400 mb-1">
-                  Analyst Attribution
+                  Assigned Analyst
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={assignee}
+                    onChange={(e) => setAssignee(e.target.value)}
+                    placeholder="e.g. analyst-1 or unassigned"
+                    className="w-full rounded bg-slate-900/80 border border-slate-700 px-2 py-1 text-xs text-slate-200 placeholder-slate-500 focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={assigning}
+                    onClick={handleAssign}
+                    className="rounded bg-accent/20 px-2.5 py-1 text-xs font-semibold text-accent border border-accent/40 hover:bg-accent/30 disabled:opacity-40 transition whitespace-nowrap"
+                  >
+                    {assigning ? "..." : "Save"}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                  Actor Attribution
                 </label>
                 <input
                   type="text"
@@ -280,15 +372,15 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
                   className="w-full rounded bg-slate-900/80 border border-slate-700 px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:border-accent focus:outline-none"
                 />
               </div>
-              <div className="sm:col-span-2">
+              <div>
                 <label className="block text-[11px] font-medium text-slate-400 mb-1">
-                  Triage Reason / Justification (Optional)
+                  Triage Reason (Optional)
                 </label>
                 <input
                   type="text"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder="e.g. Host isolated and credential rotation initiated."
+                  placeholder="e.g. Verified legitimate administrative task."
                   className="w-full rounded bg-slate-900/80 border border-slate-700 px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:border-accent focus:outline-none"
                 />
               </div>
@@ -378,6 +470,75 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               {escalateFeedback}
             </div>
           )}
+
+          {/* Alert Investigation Notes Thread */}
+          <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FaStickyNote className="text-accent" size={13} />
+                <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                  Analyst Investigation Notes ({notes.length})
+                </h3>
+              </div>
+              <span className="text-[11px] text-slate-500">Persistent SOC Case Notes</span>
+            </div>
+
+            {/* Note Input Form */}
+            <form onSubmit={handleAddNote} className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                <div className="sm:col-span-1">
+                  <input
+                    type="text"
+                    value={noteAuthor}
+                    onChange={(e) => setNoteAuthor(e.target.value)}
+                    placeholder="Author name..."
+                    className="w-full rounded bg-slate-900/90 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="sm:col-span-3 flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    value={newNote}
+                    onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="Add investigative observations, findings, or triage details..."
+                    className="flex-1 rounded bg-slate-900/90 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={noteSubmitting || !newNote.trim()}
+                    className="rounded bg-accent/20 px-3 py-1.5 text-xs font-semibold text-accent border border-accent/40 hover:bg-accent/30 disabled:opacity-40 transition whitespace-nowrap"
+                  >
+                    {noteSubmitting ? "Adding..." : "Add Note"}
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {/* Notes List */}
+            {notes.length === 0 ? (
+              <div className="text-center py-3 text-xs text-slate-500 border border-dashed border-slate-800 rounded">
+                No investigation notes added yet. Record analyst observations above.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto divide-y divide-slate-800/80">
+                {notes.map((n) => (
+                  <div key={n.id} className="pt-2 text-xs">
+                    <div className="flex items-center justify-between text-[11px] text-slate-400">
+                      <span className="font-semibold text-slate-300 flex items-center gap-1">
+                        <FaUserCheck size={10} className="text-accent" />
+                        {n.author || "Analyst"}
+                      </span>
+                      <span className="font-mono text-slate-500">{formatTimestamp(n.created_at)}</span>
+                    </div>
+                    <p className="mt-1 text-slate-200 text-xs font-sans leading-relaxed whitespace-pre-wrap">
+                      {n.note}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Persistent Status History Timeline */}
           {statusHistory && statusHistory.length > 0 && (
