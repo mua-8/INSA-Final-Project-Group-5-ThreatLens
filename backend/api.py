@@ -147,6 +147,11 @@ def reset_detection_engine(db_path: Optional[str] = None) -> None:
         reset_ransomware_engine(target_path)
     except ImportError:
         pass
+    try:
+        from backend.database import reset_database_cache
+        reset_database_cache(target_path)
+    except ImportError:
+        pass
 
 
 def sync_rule_to_engine(engine, rule_dict: dict) -> None:

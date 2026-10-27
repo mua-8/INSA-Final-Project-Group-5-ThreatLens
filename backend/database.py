@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import threading
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -297,13 +299,17 @@ CREATE TABLE IF NOT EXISTS ransomware_policies (
 # Connection factory
 # --------------------------------------------------------------------------
 
+_init_lock = threading.Lock()
+_initialized_paths: set[str] = set()
+
+
 def get_connection(db_path: str = "threatlens.db") -> sqlite3.Connection:
     """Return an open SQLite connection with row factory, WAL mode, and busy timeout."""
-    conn = sqlite3.connect(db_path, timeout=10.0)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -573,13 +579,27 @@ def migrate_database(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def init_db(db_path: str = "threatlens.db") -> sqlite3.Connection:
+def init_db(db_path: str = "threatlens.db", force: bool = False) -> sqlite3.Connection:
     """Create the database and all tables if they do not already exist."""
     conn = get_connection(db_path)
-    conn.executescript(SCHEMA_SQL)
-    migrate_database(conn)
-    conn.commit()
+    abs_path = os.path.abspath(db_path)
+    if force or abs_path not in _initialized_paths:
+        with _init_lock:
+            if force or abs_path not in _initialized_paths:
+                conn.executescript(SCHEMA_SQL)
+                migrate_database(conn)
+                conn.commit()
+                _initialized_paths.add(abs_path)
     return conn
+
+
+def reset_database_cache(db_path: Optional[str] = None) -> None:
+    """Clear initialized database cache for testing or teardown."""
+    with _init_lock:
+        if db_path is not None:
+            _initialized_paths.discard(os.path.abspath(db_path))
+        else:
+            _initialized_paths.clear()
 
 
 def check_database_integrity(conn: sqlite3.Connection) -> Dict[str, Any]:
