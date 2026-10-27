@@ -20,6 +20,7 @@ import Charts, { ChartSkeleton } from "../components/Charts.jsx";
 import AlertsTable from "../components/AlertsTable.jsx";
 import EventsTable from "../components/EventsTable.jsx";
 import EndpointTelemetryTable from "../components/EndpointTelemetryTable.jsx";
+import ThreatRadar from "../components/ThreatRadar.jsx";
 
 import AlertDetailModal from "../components/AlertDetailModal.jsx";
 import EventDetailModal from "../components/EventDetailModal.jsx";
@@ -28,6 +29,7 @@ import DatabaseHealthModal from "../components/DatabaseHealthModal.jsx";
 import TesterCenterModal from "../components/TesterCenterModal.jsx";
 import DefenseCenterModal from "../components/DefenseCenterModal.jsx";
 import useDashboardData from "../hooks/useDashboardData.js";
+import { simulateAttack } from "../services/api.js";
 
 function LoadingState() {
   return (
@@ -95,6 +97,7 @@ export default function Dashboard({ onSwitchToVictim }) {
 
   // Active SOC tab view
   const [activeTab, setActiveTab] = useState("all");
+  const [simulating, setSimulating] = useState(false);
 
   // Interactive modal states
   const [selectedAlert, setSelectedAlert] = useState(null);
@@ -108,6 +111,18 @@ export default function Dashboard({ onSwitchToVictim }) {
     auto_defense_enabled: true,
     active_quarantined_ips: 0,
     total_defense_actions: 0,
+  };
+
+  const handleTriggerLiveAttack = async () => {
+    setSimulating(true);
+    try {
+      await simulateAttack("brute_force", "198.51.100.42");
+      await retry();
+    } catch {
+      // Ignored
+    } finally {
+      setSimulating(false);
+    }
   };
 
   return (
@@ -221,6 +236,14 @@ export default function Dashboard({ onSwitchToVictim }) {
                 </div>
               </div>
             </section>
+
+            {/* LIVE DYNAMIC THREAT RADAR & TELEMETRY STREAM */}
+            <ThreatRadar
+              alerts={data.alerts || []}
+              quarantinedCount={defense.active_quarantined_ips}
+              onTriggerAttack={handleTriggerLiveAttack}
+              simulating={simulating}
+            />
 
             {/* SOC Metric KPI Cards */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
