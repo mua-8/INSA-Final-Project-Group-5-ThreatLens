@@ -30,6 +30,7 @@ Design notes
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from bisect import bisect_left, bisect_right
 from collections import Counter
@@ -39,6 +40,20 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 from backend.parser import ACCEPTED_LOGIN, INVALID_USER
 from backend.security import is_sqli_string
+
+
+def is_loopback_address(ip: Optional[str]) -> bool:
+    """Check if an IP address is a loopback address (e.g. 127.0.0.1, ::1)."""
+    if not ip:
+        return False
+    clean = str(ip).strip().strip("[]")
+    if clean.lower() in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        return ipaddress.ip_address(clean).is_loopback
+    except ValueError:
+        return False
+
 
 # --------------------------------------------------------------------------
 # Constants
@@ -205,7 +220,7 @@ def _fmt(ts: datetime) -> str:
 class Alert:
     rule_id: str
     rule_name: str
-    source_ip: str
+    source_ip: Optional[str]
     settings: dict
     events: dict = field(default_factory=dict, repr=False)   # ref -> Event (the evidence)
     id: Optional[int] = None
@@ -251,7 +266,7 @@ class Alert:
         }
 
 
-def _new_alert(rule_id: str, ip: str, events: Iterable, settings: dict) -> Alert:
+def _new_alert(rule_id: str, ip: Optional[str], events: Iterable, settings: dict) -> Alert:
     alert = Alert(rule_id=rule_id, rule_name=RULE_NAMES[rule_id], source_ip=ip,
                   settings=dict(settings),
                   events={event_ref(e): e for e in events})
@@ -320,10 +335,11 @@ def _describe_dr05(a: Alert):
     accepted = [e for e in a.events.values() if e.outcome == "success"]
     failed = len(a.events) - len(accepted)
     severity = s["accepted_severity"] if accepted else s["severity"]
-    summary = (f"{len(a.events)} root login attempts from {a.source_ip} "
+    location = f" from {a.source_ip}" if a.source_ip else ""
+    summary = (f"{len(a.events)} root login attempts{location} "
                f"({len(accepted)} accepted, {failed} failed)")
     explanation = (f"Root login attempt (DR-05): login attempts as a privileged account "
-                   f"({_names(s['usernames'])}) from {a.source_ip}. Any attempt raises "
+                   f"({_names(s['usernames'])}){location}. Any attempt raises "
                    f"'{s['severity']}'; an accepted login raises '{s['accepted_severity']}'.")
     return severity, summary, explanation
 
@@ -481,12 +497,14 @@ def _correlate(candidates: List[Alert], existing: List[Alert], gap: timedelta):
     """Fold candidates into existing alerts. Returns (created, updated)."""
     index: Dict[tuple, List[Alert]] = {}
     for alert in existing:
-        index.setdefault((alert.rule_id, alert.source_ip), []).append(alert)
+        host = next((getattr(e, "host", None) for e in alert.events.values() if getattr(e, "host", None)), None) if is_loopback_address(alert.source_ip) else None
+        index.setdefault((alert.rule_id, alert.source_ip, host), []).append(alert)
 
     created: List[Alert] = []
     updated: List[Alert] = []
     for cand in sorted(candidates, key=lambda a: (a.first_seen, a.rule_id)):
-        bucket = index.setdefault((cand.rule_id, cand.source_ip), [])
+        cand_host = next((getattr(e, "host", None) for e in cand.events.values() if getattr(e, "host", None)), None) if is_loopback_address(cand.source_ip) else None
+        bucket = index.setdefault((cand.rule_id, cand.source_ip, cand_host), [])
         match = next((a for a in bucket
                       if cand.first_seen <= a.last_seen + gap
                       and cand.last_seen >= a.first_seen - gap), None)
@@ -516,8 +534,15 @@ class DetectionEngine:
     def __init__(self, config: Optional[DetectionConfig] = None):
         self.config = config or DetectionConfig.default()
         self.alerts: List[Alert] = []
-        self._history: Dict[str, dict] = {}     # source_ip -> {ref: event}
+        self._history: Dict[Any, dict] = {}     # hkey -> {line_hash: event}
         self._next_id = 1
+
+    @staticmethod
+    def _history_key(source_ip: Optional[str], host: Optional[str] = None):
+        """Derive history grouping key, isolating loopback traffic by host."""
+        if source_ip and is_loopback_address(source_ip):
+            return (source_ip, host)
+        return source_ip
 
     def process(self, new_events: Iterable) -> DetectionResult:
         """Add newly ingested events and evaluate every rule (FR-07)."""
@@ -525,23 +550,25 @@ class DetectionEngine:
         affected = set()
 
         for event in new_events:
-            ref = event_ref(event)
-            ip = getattr(event, "source_ip", None)
-            if not ip:
-                continue
-            bucket = self._history.setdefault(ip, {})
-            if ref in bucket:
+            host = getattr(event, "host", None)
+            hkey = self._history_key(event.source_ip, host)
+            bucket = self._history.setdefault(hkey, {})
+            # Deduplicate by line_hash or matching event id
+            if event.line_hash in bucket or (event.id is not None and any(e.id == event.id for e in bucket.values())):
                 result.duplicate_events += 1     # same line uploaded again
                 continue
-            bucket[ref] = event
-            affected.add(ip)
+            bucket[event.line_hash] = event
+            affected.add(hkey)
             result.events_processed += 1
 
         candidates: List[Alert] = []
-        for ip in sorted(ip for ip in affected if ip):
-            events = sorted(self._history[ip].values(), key=lambda e: e.timestamp)
-
+        for hkey in sorted(affected, key=lambda x: (x is None, str(x))):
+            ip = hkey[0] if isinstance(hkey, tuple) else hkey
+            events = sorted(self._history[hkey].values(), key=lambda e: e.timestamp)
             for rule_id, detector in DETECTORS.items():
+                if ip is None and rule_id != "DR-05":
+                    # Rules DR-01 through DR-04 require a valid source IP for correlation
+                    continue
                 settings = self.config.rules[rule_id]
                 if settings["enabled"]:
                     candidates.extend(detector(ip, events, settings, self.config.dedupe_gap))

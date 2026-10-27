@@ -1,0 +1,136 @@
+[
+  {
+    "Id": 4625,
+    "RecordId": 10001,
+    "TimeCreated": "2026-10-26T06:12:30.123456+00:00",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "Channel": "Security",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "TargetUserName": "Administrator",
+      "TargetDomainName": "CORP",
+      "TargetUserSid": "S-1-5-21-123456789-123456789-123456789-500",
+      "LogonType": "3",
+      "Status": "0xC000006D",
+      "SubStatus": "0xC0000064",
+      "FailureReason": "%%2313",
+      "WorkstationName": "WORKSTATION-01",
+      "IpAddress": "192.0.2.10",
+      "IpPort": "54123",
+      "LogonProcessName": "NtLmSsp",
+      "AuthenticationPackageName": "NTLM"
+    }
+  },
+  {
+    "Id": 4624,
+    "RecordId": 10002,
+    "TimeCreated": "2026-10-26T06:13:00.000000+00:00",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "Channel": "Security",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "TargetUserName": "alice",
+      "TargetDomainName": "CORP",
+      "TargetUserSid": "S-1-5-21-123456789-123456789-123456789-1001",
+      "LogonType": "2",
+      "WorkstationName": "WIN-SRV-2022",
+      "IpAddress": "192.0.2.15",
+      "IpPort": "0",
+      "LogonProcessName": "User32",
+      "AuthenticationPackageName": "Negotiate",
+      "ElevatedToken": "%%1842"
+    }
+  },
+  {
+    "Id": 4672,
+    "RecordId": 10003,
+    "TimeCreated": "2026-10-26T06:13:01.000000+00:00",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "Channel": "Security",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "SubjectUserName": "Administrator",
+      "SubjectDomainName": "CORP",
+      "SubjectUserSid": "S-1-5-21-123456789-123456789-123456789-500",
+      "PrivilegeList": "SeSecurityPrivilege\n\tSeBackupPrivilege\n\tSeRestorePrivilege\n\tSeTakeOwnershipPrivilege\n\tSeDebugPrivilege"
+    }
+  },
+  {
+    "Id": 4688,
+    "RecordId": 10004,
+    "TimeCreated": "2026-10-26T06:14:00.000000+00:00",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "Channel": "Security",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
+      "ProcessId": "0x1f4",
+      "ParentProcessName": "C:\\Windows\\explorer.exe",
+      "CreatorProcessId": "0x1a0",
+      "SubjectUserName": "alice",
+      "SubjectDomainName": "CORP",
+      "SubjectUserSid": "S-1-5-21-123456789-123456789-123456789-1001",
+      "MandatoryLabel": "Mandatory Label\\High Mandatory Level",
+      "CommandLine": "cmd.exe /c whoami"
+    }
+  },
+  {
+    "Id": 4625,
+    "RecordId": 10005,
+    "TimeCreated": "2026-10-26T06:15:00.000000+00:00",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "Channel": "Security",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "TargetUserName": "-",
+      "TargetDomainName": "-",
+      "LogonType": "3",
+      "Status": "0xC000006D",
+      "SubStatus": "0xC0000064",
+      "WorkstationName": "-",
+      "IpAddress": "-",
+      "IpPort": "-"
+    }
+  },
+  {
+    "Id": 9999,
+    "RecordId": 10006,
+    "TimeCreated": "2026-10-26T06:16:00.000000+00:00",
+    "ProviderName": "SomeUnknownProvider",
+    "Channel": "Security",
+    "EventData": {
+      "Data": "Unknown event"
+    }
+  },
+  {
+    "Id": 1,
+    "RecordId": 20001,
+    "TimeCreated": "2026-10-26T06:17:00.000000+00:00",
+    "ProviderName": "Microsoft-Windows-Sysmon",
+    "Channel": "Microsoft-Windows-Sysmon/Operational",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "Image": "C:\\Windows\\System32\\powershell.exe",
+      "User": "CORP\\alice",
+      "CommandLine": "powershell.exe -enc AAAA",
+      "Hashes": "SHA256=1234567890ABCDEF",
+      "ParentImage": "C:\\Windows\\explorer.exe"
+    }
+  },
+  {
+    "Id": 3,
+    "RecordId": 20002,
+    "TimeCreated": "2026-10-26T06:18:00.000000+00:00",
+    "ProviderName": "Microsoft-Windows-Sysmon",
+    "Channel": "Microsoft-Windows-Sysmon/Operational",
+    "Computer": "WIN-SRV-2022.corp.local",
+    "EventData": {
+      "Image": "C:\\Windows\\System32\\curl.exe",
+      "User": "CORP\\alice",
+      "SourceIp": "192.0.2.10",
+      "DestinationIp": "198.51.100.25",
+      "DestinationPort": "443",
+      "Protocol": "tcp"
+    }
+  }
+]

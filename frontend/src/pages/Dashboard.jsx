@@ -1,10 +1,24 @@
+
 import React, { useState } from "react";
-import { FaListUl, FaBell, FaExclamationTriangle, FaNetworkWired, FaPlug, FaRedo, FaShieldAlt, FaBan, FaBolt, FaGlobe } from "react-icons/fa";
+import {
+  FaListUl,
+  FaBell,
+  FaExclamationTriangle,
+  FaNetworkWired,
+  FaPlug,
+  FaRedo,
+  FaShieldAlt,
+  FaBan,
+  FaBolt,
+  FaGlobe,
+} from "react-icons/fa";
 import Header from "../components/Header.jsx";
 import StatCard, { StatCardSkeleton } from "../components/StatCard.jsx";
 import Charts, { ChartSkeleton } from "../components/Charts.jsx";
 import AlertsTable from "../components/AlertsTable.jsx";
 import EventsTable from "../components/EventsTable.jsx";
+import EndpointTelemetryTable from "../components/EndpointTelemetryTable.jsx";
+
 import AlertDetailModal from "../components/AlertDetailModal.jsx";
 import EventDetailModal from "../components/EventDetailModal.jsx";
 import IngestModal from "../components/IngestModal.jsx";
@@ -20,11 +34,17 @@ function LoadingState() {
         <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-accent" />
         Connecting to ThreatLens API...
       </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)}
+        {Array.from({ length: 4 }).map((_, i) => (
+          <StatCardSkeleton key={i} />
+        ))}
       </div>
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, i) => <ChartSkeleton key={i} />)}
+        {Array.from({ length: 4 }).map((_, i) => (
+          <ChartSkeleton key={i} />
+        ))}
       </div>
     </div>
   );
@@ -32,12 +52,20 @@ function LoadingState() {
 
 function ErrorState({ message, onRetry, retrying }) {
   return (
-    <div role="alert" className="mx-auto mt-16 max-w-lg rounded-xl border border-danger/40 bg-card p-8 text-center shadow-lg">
+    <div
+      role="alert"
+      className="mx-auto mt-16 max-w-lg rounded-xl border border-danger/40 bg-card p-8 text-center shadow-lg"
+    >
       <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger/15 text-danger">
         <FaPlug size={20} />
       </div>
-      <h2 className="text-lg font-semibold text-white">API connection failed</h2>
+
+      <h2 className="text-lg font-semibold text-white">
+        API connection failed
+      </h2>
+
       <p className="mt-2 text-sm text-slate-400">{message}</p>
+
       <button
         onClick={onRetry}
         disabled={retrying}
@@ -51,8 +79,18 @@ function ErrorState({ message, onRetry, retrying }) {
 }
 
 export default function Dashboard({ onSwitchToVictim }) {
-  const { data, loading, refreshing, error, lastUpdated, retry } = useDashboardData();
-  
+  const {
+    data,
+    endpointEvents,
+    endpointLoading,
+    endpointError,
+    loading,
+    refreshing,
+    error,
+    lastUpdated,
+    retry,
+  } = useDashboardData();
+
   // Interactive modal states
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -86,14 +124,31 @@ export default function Dashboard({ onSwitchToVictim }) {
       <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
         {loading && !data && <LoadingState />}
 
-        {error && !data && !loading && <ErrorState message={error} onRetry={retry} retrying={refreshing} />}
+        {error && !data && !loading && (
+          <ErrorState
+            message={error}
+            onRetry={retry}
+            retrying={refreshing}
+          />
+        )}
 
         {data && (
           <>
             {error && (
-              <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
-                <span>Connection lost. Showing the last data received. Retrying every 15 seconds.</span>
-                <button onClick={retry} className="font-semibold underline underline-offset-2">Retry now</button>
+              <div
+                role="alert"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
+              >
+                <span>
+                  Connection lost. Showing the last data received. Retrying
+                  every 15 seconds.
+                </span>
+                <button
+                  onClick={retry}
+                  className="font-semibold underline underline-offset-2"
+                >
+                  Retry now
+                </button>
               </div>
             )}
 
@@ -161,15 +216,35 @@ export default function Dashboard({ onSwitchToVictim }) {
               </div>
             </div>
 
-            {/* Stat Cards */}
+            {/* Dashboard statistics */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <StatCard label="Total Events" value={data.summary.totalEvents} icon={FaListUl} tone="accent" />
-              <StatCard label="Total Alerts" value={data.summary.totalAlerts} icon={FaBell} tone="warning" />
-              <StatCard label="High Severity Alerts" value={data.summary.highSeverity} icon={FaExclamationTriangle} tone="danger" />
-              <StatCard label="Unique Source IPs" value={data.summary.uniqueIps} icon={FaNetworkWired} tone="success" />
+              <StatCard
+                label="Total Events"
+                value={data.summary.totalEvents}
+                icon={FaListUl}
+                tone="accent"
+              />
+              <StatCard
+                label="Total Alerts"
+                value={data.summary.totalAlerts}
+                icon={FaBell}
+                tone="warning"
+              />
+              <StatCard
+                label="High Severity Alerts"
+                value={data.summary.highSeverity}
+                icon={FaExclamationTriangle}
+                tone="danger"
+              />
+              <StatCard
+                label="Unique Source IPs"
+                value={data.summary.uniqueIps}
+                icon={FaNetworkWired}
+                tone="success"
+              />
             </div>
 
-            {/* Analytics & Distribution Charts */}
+            {/* Analytics and distribution charts */}
             <Charts
               severity={data.severity}
               eventsTimeline={data.eventsTimeline}
@@ -177,22 +252,37 @@ export default function Dashboard({ onSwitchToVictim }) {
               topIps={data.topIps}
             />
 
-            {/* Ingested Alerts Table with Click Triage */}
+            {/* Existing alerts table */}
             <AlertsTable
               alerts={data.alerts}
               onSelectAlert={(alert) => setSelectedAlert(alert)}
             />
 
-            {/* Ingested Events Table with Click Raw Syslog Inspection */}
+            {/* Existing SSH authentication events table */}
             <EventsTable
               events={data.events}
               onSelectEvent={(event) => setSelectedEvent(event)}
+            />
+
+            {/* New endpoint agent telemetry table */}
+            {endpointError && (
+              <div
+                role="status"
+                className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
+              >
+                {endpointError} Existing SSH events and alerts are unaffected.
+              </div>
+            )}
+
+            <EndpointTelemetryTable
+              events={endpointEvents}
+              loading={endpointLoading}
             />
           </>
         )}
       </main>
 
-      {/* Interactive Modals */}
+      {/* Existing alert details modal */}
       {selectedAlert && (
         <AlertDetailModal
           alert={selectedAlert}
@@ -201,6 +291,7 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
+      {/* Existing SSH event details modal */}
       {selectedEvent && (
         <EventDetailModal
           event={selectedEvent}
@@ -208,6 +299,7 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
+      {/* Existing log ingestion modal */}
       {showIngestModal && (
         <IngestModal
           onClose={() => setShowIngestModal(false)}
@@ -215,12 +307,14 @@ export default function Dashboard({ onSwitchToVictim }) {
         />
       )}
 
+      {/* Existing database health modal */}
       {showDbHealthModal && (
         <DatabaseHealthModal
           onClose={() => setShowDbHealthModal(false)}
         />
       )}
 
+      {/* Existing tester center modal */}
       {showTesterCenter && (
         <TesterCenterModal
           onClose={() => setShowTesterCenter(false)}

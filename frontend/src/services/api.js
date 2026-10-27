@@ -224,7 +224,6 @@ export const callRawEndpoint = async (method, path, body = null) => {
     data: res.data,
   };
 };
-
 // --------------------------------------------------------------------------
 // Active Defense & Prevention Endpoints
 // --------------------------------------------------------------------------
@@ -324,3 +323,8 @@ export const resetVictimIp = async (ip_address) => {
   return res.data?.data || res.data;
 };
 
+// Endpoint Agent Telemetry
+export const getEndpointEvents = async (params = {}) => {
+  const res = await client.get("/api/v1/events", { params });
+  return res.data;
+};

@@ -9,6 +9,7 @@ ever used to build SQL, preventing SQL injection.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
@@ -40,6 +41,28 @@ def list_log_files(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM log_files ORDER BY uploaded_at DESC"
     ).fetchall()
+
+
+def get_or_create_endpoint_log_file(conn: sqlite3.Connection, device_id: str) -> int:
+    """Retrieve or create a deterministic log_files record for an endpoint device.
+
+    Allows endpoint events to satisfy the foreign key constraint
+    events.log_file_id -> log_files(id).
+    """
+    clean_id = (device_id or "unknown").strip()
+    filename = f"endpoint-agent:{clean_id}"
+    file_hash = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    row = conn.execute(
+        "SELECT id FROM log_files WHERE file_hash = ?", (file_hash,)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        """INSERT INTO log_files (filename, file_hash, line_count, event_count, malformed_count)
+           VALUES (?, ?, 0, 0, 0)""",
+        (filename, file_hash),
+    )
+    return cur.lastrowid
 
 
 # --------------------------------------------------------------------------
@@ -74,7 +97,7 @@ def insert_events_batch(conn: sqlite3.Connection, log_file_id: int,
                 ev["line_hash"],
             ),
         )
-        ids.append(cur.lastrowid if cur.lastrowid else None)
+        ids.append(cur.lastrowid if cur.rowcount > 0 else None)
     return ids
 
 
@@ -428,6 +451,55 @@ def record_defense_action(conn: sqlite3.Connection, action_type: str,
     return cur.lastrowid
 
 
+# --------------------------------------------------------------------------
+# endpoint_events
+# --------------------------------------------------------------------------
+
+def get_endpoint_event(conn: sqlite3.Connection, event_id: str) -> Optional[sqlite3.Row]:
+    """Retrieve a single endpoint event by its unique UUID event_id."""
+    return conn.execute(
+        "SELECT * FROM endpoint_events WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+
+
+def insert_endpoint_event(
+    conn: sqlite3.Connection,
+    event_id: str,
+    device_id: str,
+    timestamp: str,
+    source: str,
+    event_type: str,
+    severity: str,
+    schema_version: str = "1.0.0",
+    source_ip: Optional[str] = None,
+    username: Optional[str] = None,
+    raw_event: Optional[str] = None,
+    attributes: str = "{}",
+) -> int:
+    """Insert an endpoint event record. Returns the new integer row id."""
+    cur = conn.execute(
+        """INSERT INTO endpoint_events
+           (event_id, device_id, timestamp, source, event_type, severity,
+            schema_version, source_ip, username, raw_event, attributes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            event_id,
+            device_id,
+            timestamp,
+            source,
+            event_type,
+            severity,
+            schema_version,
+            source_ip,
+            username,
+            raw_event,
+            attributes,
+        ),
+    )
+    return cur.lastrowid
+
+
 def list_defense_actions(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
     """Return recent defense actions for the admin telemetry feed."""
     return conn.execute(
@@ -465,3 +537,51 @@ def get_defense_summary(conn: sqlite3.Connection) -> Dict[str, Any]:
         "total_defense_actions": total_actions,
     }
 
+
+def list_endpoint_events(
+    conn: sqlite3.Connection,
+    device_id: Optional[str] = None,
+    source: Optional[str] = None,
+    event_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    source_ip: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[sqlite3.Row]:
+    """Filtered endpoint events query."""
+    clauses, params = [], []
+    if device_id:
+        clauses.append("device_id = ?")
+        params.append(device_id)
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if severity:
+        clauses.append("severity = ?")
+        params.append(severity)
+    if source_ip:
+        clauses.append("source_ip = ?")
+        params.append(source_ip)
+    if since:
+        clauses.append("timestamp >= ?")
+        params.append(since)
+    if until:
+        clauses.append("timestamp <= ?")
+        params.append(until)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    return conn.execute(
+        f"SELECT * FROM endpoint_events {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        params,
+    ).fetchall()
+
+
+def count_endpoint_events(conn: sqlite3.Connection) -> int:
+    """Return total number of endpoint events stored."""
+    return conn.execute("SELECT COUNT(*) FROM endpoint_events").fetchone()[0]
