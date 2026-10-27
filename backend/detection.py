@@ -203,7 +203,7 @@ def is_accepted_login(event) -> bool:
 
 
 def _fmt(ts: datetime) -> str:
-    return ts.strftime("%Y-%m-%d %H:%M:%S")
+    return ts.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 # --------------------------------------------------------------------------
@@ -218,6 +218,7 @@ class Alert:
     settings: dict
     events: dict = field(default_factory=dict, repr=False)   # ref -> Event (the evidence)
     id: Optional[int] = None
+    target_host: Optional[str] = None
     status: str = STATUS_NEW
     severity: str = "low"
     first_seen: Optional[datetime] = None
@@ -227,11 +228,13 @@ class Alert:
     evidence_ids: list = field(default_factory=list)
 
     def refresh(self) -> None:
-        """Recompute times, evidence list, severity and text from the evidence."""
+        """Recompute times, evidence list, severity, target host and text from the evidence."""
         ordered = sorted(self.events.items(), key=lambda item: (item[1].timestamp, str(item[0])))
         self.evidence_ids = [ref for ref, _ in ordered]
         self.first_seen = ordered[0][1].timestamp
         self.last_seen = ordered[-1][1].timestamp
+        if self.target_host is None:
+            self.target_host = next((getattr(e, "host", None) for e in self.events.values() if getattr(e, "host", None)), None)
         self.severity, self.summary, self.explanation = _DESCRIBERS[self.rule_id](self)
 
     def absorb(self, other: "Alert") -> bool:
@@ -239,6 +242,8 @@ class Alert:
         before = (len(self.events), self.severity, self.last_seen)
         for ref, event in other.events.items():
             self.events.setdefault(ref, event)
+        if self.target_host is None and other.target_host:
+            self.target_host = other.target_host
         self.refresh()
         return before != (len(self.events), self.severity, self.last_seen)
 
@@ -250,6 +255,7 @@ class Alert:
             "severity": self.severity,
             "status": self.status,
             "source_ip": self.source_ip,
+            "target_host": self.target_host,
             "first_seen": self.first_seen.isoformat(),
             "last_seen": self.last_seen.isoformat(),
             "summary": self.summary,

@@ -279,6 +279,106 @@ class TestRepositoryOperations(unittest.TestCase):
         self.assertEqual(stats["unique_ips"], 2)
         self.assertEqual(stats["unique_users"], 2)
 
+    def test_alert_status_history_audit_trail_and_cascade(self):
+        alert_id = repo.insert_alert(
+            self.conn,
+            {
+                "rule_id": "DR-01",
+                "rule_name": "SSH brute force",
+                "severity": "medium",
+                "status": "new",
+                "source_ip": "10.0.0.5",
+                "target_host": "gateway-01",
+                "first_seen": "2026-10-26T10:00:00Z",
+                "last_seen": "2026-10-26T10:05:00Z",
+                "summary": "Brute force attempts",
+                "explanation": "Test explanation",
+            },
+        )
+        self.conn.commit()
+
+        # Step 1: Update to investigating
+        ok1 = repo.update_alert_status(
+            self.conn, alert_id, "investigating", actor="SOC Analyst 1", reason="Initial triage"
+        )
+        self.assertTrue(ok1)
+        self.conn.commit()
+
+        # Step 2: Update to resolved
+        ok2 = repo.update_alert_status(
+            self.conn, alert_id, "resolved", actor="SOC Analyst 2", reason="Host isolated and confirmed contained"
+        )
+        self.assertTrue(ok2)
+        self.conn.commit()
+
+        history = repo.get_alert_status_history(self.conn, alert_id)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0]["old_status"], "new")
+        self.assertEqual(history[0]["new_status"], "investigating")
+        self.assertEqual(history[0]["actor"], "SOC Analyst 1")
+        self.assertEqual(history[0]["reason"], "Initial triage")
+
+        self.assertEqual(history[1]["old_status"], "investigating")
+        self.assertEqual(history[1]["new_status"], "resolved")
+        self.assertEqual(history[1]["actor"], "SOC Analyst 2")
+        self.assertEqual(history[1]["reason"], "Host isolated and confirmed contained")
+
+        # Step 3: Deleting alert cascades to status history
+        self.conn.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
+        self.conn.commit()
+        remaining_history = repo.get_alert_status_history(self.conn, alert_id)
+        self.assertEqual(len(remaining_history), 0)
+
+    def test_alert_target_host_field_and_filtering(self):
+        a1 = repo.insert_alert(
+            self.conn,
+            {
+                "rule_id": "DR-01",
+                "rule_name": "SSH brute force",
+                "severity": "medium",
+                "source_ip": "192.168.1.10",
+                "target_host": "db-server-01",
+                "first_seen": "2026-10-26T12:00:00Z",
+                "last_seen": "2026-10-26T12:05:00Z",
+                "summary": "Alert 1",
+                "explanation": "Exp 1",
+            },
+        )
+        a2 = repo.insert_alert(
+            self.conn,
+            {
+                "rule_id": "DR-02",
+                "rule_name": "Username enum",
+                "severity": "low",
+                "source_ip": "192.168.1.20",
+                "target_host": "web-proxy-02",
+                "first_seen": "2026-10-26T12:00:00Z",
+                "last_seen": "2026-10-26T12:05:00Z",
+                "summary": "Alert 2",
+                "explanation": "Exp 2",
+            },
+        )
+        self.conn.commit()
+
+        fetched_a1 = repo.get_alert(self.conn, a1)
+        self.assertEqual(fetched_a1["target_host"], "db-server-01")
+
+        db_alerts = repo.list_alerts(self.conn, target_host="db-server-01")
+        self.assertEqual(len(db_alerts), 1)
+        self.assertEqual(db_alerts[0]["id"], a1)
+
+        web_alerts = repo.list_alerts(self.conn, target_host="web-proxy-02")
+        self.assertEqual(len(web_alerts), 1)
+        self.assertEqual(web_alerts[0]["id"], a2)
+
+    def test_database_migration_backfills_target_host(self):
+        from backend.database import migrate_database, get_database_metrics
+        # Re-running migrate_database on initialized db should be idempotent and clean
+        migrate_database(self.conn)
+        metrics = get_database_metrics(self.conn)
+        self.assertIn("alert_status_history", metrics["table_counts"])
+        self.assertEqual(metrics["journal_mode"].upper(), "WAL")
+
 
 if __name__ == "__main__":
     unittest.main()

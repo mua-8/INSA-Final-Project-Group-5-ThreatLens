@@ -13,6 +13,7 @@ export default function EventsTable({ events = [], onSelectEvent }) {
       const matchSearch =
         search === "" ||
         (e.sourceIp && e.sourceIp.toLowerCase().includes(search.toLowerCase())) ||
+        (e.host && e.host.toLowerCase().includes(search.toLowerCase())) ||
         (e.username && e.username.toLowerCase().includes(search.toLowerCase())) ||
         (e.eventType && e.eventType.toLowerCase().includes(search.toLowerCase())) ||
         (e.rawLine && e.rawLine.toLowerCase().includes(search.toLowerCase()));
@@ -34,8 +35,13 @@ export default function EventsTable({ events = [], onSelectEvent }) {
     },
     {
       key: "timestamp",
-      label: "Timestamp",
+      label: "Timestamp (UTC)",
       render: (r) => <span className="font-mono text-xs text-slate-300">{formatTimestamp(r.timestamp)}</span>,
+    },
+    {
+      key: "host",
+      label: "Host",
+      render: (r) => <span className="font-mono text-xs text-slate-300">{r.host || "server"}</span>,
     },
     {
       key: "username",
@@ -85,7 +91,7 @@ export default function EventsTable({ events = [], onSelectEvent }) {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search events by user, IP, or raw syslog text..."
+            placeholder="Search events by user, IP, host, or raw log text..."
             className="w-full rounded-lg border border-slate-700 bg-slate-900/60 pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-accent focus:outline-none"
           />
         </div>
@@ -105,7 +111,7 @@ export default function EventsTable({ events = [], onSelectEvent }) {
       </div>
 
       <DataTable
-        title="Ingested SSH Authentication Events (Click row to inspect raw syslog & hash)"
+        title="SSH Authentication Events"
         count={filteredEvents.length}
         columns={columns}
         rows={filteredEvents}

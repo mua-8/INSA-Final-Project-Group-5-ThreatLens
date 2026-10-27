@@ -7,6 +7,9 @@ import {
   FaNetworkWired,
   FaPlug,
   FaRedo,
+  FaChartBar,
+  FaFolderOpen,
+  FaDesktop,
 } from "react-icons/fa";
 
 import Header from "../components/Header.jsx";
@@ -15,6 +18,7 @@ import Charts, { ChartSkeleton } from "../components/Charts.jsx";
 import AlertsTable from "../components/AlertsTable.jsx";
 import EventsTable from "../components/EventsTable.jsx";
 import EndpointTelemetryTable from "../components/EndpointTelemetryTable.jsx";
+import IncidentsView from "../components/IncidentsView.jsx";
 
 import AlertDetailModal from "../components/AlertDetailModal.jsx";
 import EventDetailModal from "../components/EventDetailModal.jsx";
@@ -95,6 +99,9 @@ export default function Dashboard() {
   const [showDbHealthModal, setShowDbHealthModal] = useState(false);
   const [showTesterCenter, setShowTesterCenter] = useState(false);
 
+  // Tabbed view navigation
+  const [activeTab, setActiveTab] = useState("overview"); // "overview" | "alerts" | "incidents" | "events" | "telemetry"
+
   return (
     <div className="min-h-screen bg-primary pb-16">
       <Header
@@ -145,18 +152,21 @@ export default function Dashboard() {
                 value={data.summary.totalEvents}
                 icon={FaListUl}
                 tone="accent"
+                sublabel={`${data.summary.uniqueIps} Sources`}
               />
               <StatCard
                 label="Total Alerts"
                 value={data.summary.totalAlerts}
                 icon={FaBell}
                 tone="warning"
+                sublabel={`${data.summary.openAlerts || 0} Open`}
               />
               <StatCard
-                label="High Severity Alerts"
+                label="High & Critical Alerts"
                 value={data.summary.highSeverity}
                 icon={FaExclamationTriangle}
                 tone="danger"
+                sublabel={`Crit: ${data.summary.criticalAlerts || 0} • High: ${data.summary.highAlerts || 0}`}
               />
               <StatCard
                 label="Unique Source IPs"
@@ -166,40 +176,149 @@ export default function Dashboard() {
               />
             </div>
 
-            {/* Analytics and distribution charts */}
-            <Charts
-              severity={data.severity}
-              eventsTimeline={data.eventsTimeline}
-              alertTrend={data.alertTrend}
-              topIps={data.topIps}
-            />
-
-            {/* Existing alerts table */}
-            <AlertsTable
-              alerts={data.alerts}
-              onSelectAlert={(alert) => setSelectedAlert(alert)}
-            />
-
-            {/* Existing SSH authentication events table */}
-            <EventsTable
-              events={data.events}
-              onSelectEvent={(event) => setSelectedEvent(event)}
-            />
-
-            {/* New endpoint agent telemetry table */}
-            {endpointError && (
-              <div
-                role="status"
-                className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
+            {/* View Navigation Tabs */}
+            <nav className="flex flex-wrap items-center gap-2 border-b border-slate-700/80 pb-3 pt-1" aria-label="Dashboard views">
+              <button
+                type="button"
+                onClick={() => setActiveTab("overview")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "overview"
+                    ? "bg-accent text-slate-900 shadow-md shadow-accent/20"
+                    : "bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white"
+                }`}
               >
-                {endpointError} Existing SSH events and alerts are unaffected.
+                <FaChartBar size={12} />
+                <span>SOC Overview</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("alerts")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "alerts"
+                    ? "bg-accent text-slate-900 shadow-md shadow-accent/20"
+                    : "bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaBell size={12} />
+                <span>Security Alerts</span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-mono ${
+                  activeTab === "alerts" ? "bg-slate-900/40 text-slate-900 font-bold" : "bg-slate-700 text-slate-300"
+                }`}>
+                  {data.alerts?.length || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("incidents")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "incidents"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                    : "bg-slate-800/80 text-indigo-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaFolderOpen size={12} />
+                <span>Incident Cases</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("events")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "events"
+                    ? "bg-accent text-slate-900 shadow-md shadow-accent/20"
+                    : "bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaListUl size={12} />
+                <span>SSH Events</span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-mono ${
+                  activeTab === "events" ? "bg-slate-900/40 text-slate-900 font-bold" : "bg-slate-700 text-slate-300"
+                }`}>
+                  {data.events?.length || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("telemetry")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "telemetry"
+                    ? "bg-accent text-slate-900 shadow-md shadow-accent/20"
+                    : "bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <FaDesktop size={12} />
+                <span>Endpoint Telemetry</span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-mono ${
+                  activeTab === "telemetry" ? "bg-slate-900/40 text-slate-900 font-bold" : "bg-slate-700 text-slate-300"
+                }`}>
+                  {endpointEvents?.length || 0}
+                </span>
+              </button>
+            </nav>
+
+            {/* Tab 1: SOC Overview */}
+            {activeTab === "overview" && (
+              <div className="space-y-6 animate-fadeIn">
+                <Charts
+                  severity={data.severity}
+                  eventsTimeline={data.eventsTimeline}
+                  alertTrend={data.alertTrend}
+                  topIps={data.topIps}
+                />
+                <AlertsTable
+                  alerts={data.alerts}
+                  onSelectAlert={(alert) => setSelectedAlert(alert)}
+                />
               </div>
             )}
 
-            <EndpointTelemetryTable
-              events={endpointEvents}
-              loading={endpointLoading}
-            />
+            {/* Tab 2: Security Alerts Dedicated View */}
+            {activeTab === "alerts" && (
+              <div className="space-y-4 animate-fadeIn">
+                <AlertsTable
+                  alerts={data.alerts}
+                  onSelectAlert={(alert) => setSelectedAlert(alert)}
+                />
+              </div>
+            )}
+
+            {/* Tab 3: Incident Management View */}
+            {activeTab === "incidents" && (
+              <div className="space-y-4 animate-fadeIn">
+                <IncidentsView onRefreshDashboard={retry} />
+              </div>
+            )}
+
+            {/* Tab 4: SSH Authentication Events */}
+            {activeTab === "events" && (
+              <div className="space-y-4 animate-fadeIn">
+                <EventsTable
+                  events={data.events}
+                  onSelectEvent={(event) => setSelectedEvent(event)}
+                />
+              </div>
+            )}
+
+            {/* Tab 5: Endpoint Agent Telemetry */}
+            {activeTab === "telemetry" && (
+              <div className="space-y-4 animate-fadeIn">
+                {endpointError && (
+                  <div
+                    role="status"
+                    className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning"
+                  >
+                    {endpointError} Existing SSH events and alerts are unaffected.
+                  </div>
+                )}
+                <EndpointTelemetryTable
+                  events={endpointEvents}
+                  loading={endpointLoading}
+                />
+              </div>
+            )}
           </>
         )}
       </main>

@@ -99,7 +99,7 @@ export default function EventDetailModal({ event, onClose }) {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Original Syslog Line (Stored in SQLite `events.raw_line`)
+                Original Authentication Log Message
               </span>
               <button
                 onClick={handleCopy}
@@ -118,7 +118,7 @@ export default function EventDetailModal({ event, onClose }) {
           <div className="flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/40 p-3 text-xs text-slate-400">
             <FaFingerprint className="text-accent flex-shrink-0" size={16} />
             <div>
-              <span className="text-white font-medium">Database Audit Guarantee:</span> Each line is SHA-256 hashed and indexed with <code className="font-mono text-accent">idx_events_ip_time</code> for sub-millisecond detection queries.
+              <span className="text-white font-medium">Log Integrity:</span> This record is cryptographically indexed and preserved in its raw ingested format for forensic verification.
             </div>
           </div>
 
@@ -127,7 +127,7 @@ export default function EventDetailModal({ event, onClose }) {
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-slate-700/80 px-6 py-3 bg-slate-900/60">
           <div className="text-xs text-slate-400">
-            Storage Engine: <span className="font-mono text-slate-300">SQLite events table</span>
+            Authentication Telemetry Record #{event.id || "?"}
           </div>
           <button
             onClick={onClose}

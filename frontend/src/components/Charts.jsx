@@ -18,16 +18,16 @@ export function ChartSkeleton() {
   return (
     <div className="animate-pulse rounded-xl border border-slate-700/60 bg-card p-5">
       <div className="mb-4 h-4 w-40 rounded bg-slate-700" />
-      <div className="h-64 rounded bg-slate-700/50" />
+      <div className="h-52 rounded bg-slate-700/50" />
     </div>
   );
 }
 
 function ChartCard({ title, empty, children }) {
   return (
-    <section className="rounded-xl border border-slate-700/60 bg-card p-5 shadow-lg shadow-black/20">
-      <h2 className="mb-4 font-semibold text-white">{title}</h2>
-      <div className="h-64">
+    <section className="rounded-xl border border-slate-700/60 bg-card p-4 shadow-lg shadow-black/20">
+      <h2 className="mb-3 font-semibold text-white text-sm">{title}</h2>
+      <div className="h-52">
         {empty ? (
           <div className="flex h-full items-center justify-center text-sm text-slate-500">No data available yet.</div>
         ) : (
@@ -53,17 +53,17 @@ export default function Charts({ severity, eventsTimeline, alertTrend, topIps })
         </PieChart>
       </ChartCard>
 
-      <ChartCard title="Events Timeline" empty={!eventsTimeline.length}>
+      <ChartCard title="Events Timeline (UTC)" empty={!eventsTimeline.length}>
         <LineChart data={eventsTimeline} margin={{ left: -15, right: 8, top: 8 }}>
           <CartesianGrid stroke="#334155" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="label" {...axis} />
           <YAxis allowDecimals={false} {...axis} />
           <Tooltip {...tooltipStyle} />
-          <Line type="monotone" dataKey="count" name="Events" stroke="#38bdf8" strokeWidth={2.5} dot={{ r: 3, fill: "#38bdf8" }} activeDot={{ r: 5 }} />
+          <Line type="linear" dataKey="count" name="Events" stroke="#38bdf8" strokeWidth={2.5} dot={{ r: 3, fill: "#38bdf8" }} activeDot={{ r: 5 }} />
         </LineChart>
       </ChartCard>
 
-      <ChartCard title="Alert Trend" empty={!alertTrend.length}>
+      <ChartCard title="Alert Trend (UTC)" empty={!alertTrend.length}>
         <AreaChart data={alertTrend} margin={{ left: -15, right: 8, top: 8 }}>
           <defs>
             <linearGradient id="alertFill" x1="0" y1="0" x2="0" y2="1">
@@ -75,7 +75,7 @@ export default function Charts({ severity, eventsTimeline, alertTrend, topIps })
           <XAxis dataKey="label" {...axis} />
           <YAxis allowDecimals={false} {...axis} />
           <Tooltip {...tooltipStyle} />
-          <Area type="monotone" dataKey="count" name="Alerts" stroke="#f59e0b" strokeWidth={2.5} fill="url(#alertFill)" />
+          <Area type="linear" dataKey="count" name="Alerts" stroke="#f59e0b" strokeWidth={2.5} fill="url(#alertFill)" />
         </AreaChart>
       </ChartCard>
 

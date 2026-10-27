@@ -38,7 +38,7 @@ ACCEPTED_RE = re.compile(
     r"^Accepted\s+(?P<method>\S+)\s+for\s+(?P<user>\S+)\s+from\s+(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
 )
 DISCONNECT_RE = re.compile(
-    r"^Disconnected from\s+(?:invalid user\s+)?(?P<user>\S+)?\s*(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
+    r"^Disconnected from\s+(?:(?:invalid user|authenticating user|user)\s+(?P<user>\S+)\s+)?(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
 )
 
 MONTH_MAP = {
@@ -176,6 +176,6 @@ def parse_text(text: str, year: int) -> ParseResult:
 def parse_file(filepath: str, year: int) -> ParseResult:
     path = Path(filepath)
     if not path.exists():
-        return ParseResult(events=[], malformed_count=0)
+        raise FileNotFoundError(f"Log file does not exist: {filepath}")
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         return parse_text(f.read(), year)

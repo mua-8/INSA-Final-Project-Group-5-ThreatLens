@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     status      TEXT    NOT NULL DEFAULT 'new'
                         CHECK(status IN ('new','investigating','resolved','false_positive')),
     source_ip   TEXT    NOT NULL,
+    target_host TEXT,                           -- Target host/device under attack
     first_seen  TEXT    NOT NULL,
     last_seen   TEXT    NOT NULL,
     summary     TEXT    NOT NULL,
@@ -92,6 +93,18 @@ CREATE TABLE IF NOT EXISTS alert_evidence (
     event_id    INTEGER NOT NULL REFERENCES events(id)  ON DELETE CASCADE,
     PRIMARY KEY (alert_id, event_id)
 );
+
+CREATE TABLE IF NOT EXISTS alert_status_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id    INTEGER NOT NULL REFERENCES alerts(id)  ON DELETE CASCADE,
+    old_status  TEXT    NOT NULL,
+    new_status  TEXT    NOT NULL CHECK(new_status IN ('new','investigating','resolved','false_positive')),
+    changed_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    actor       TEXT    NOT NULL DEFAULT 'SOC Analyst',
+    reason      TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_history_alert_id ON alert_status_history(alert_id);
 
 CREATE TABLE IF NOT EXISTS incidents (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,10 +183,45 @@ def get_connection(db_path: str = "threatlens.db") -> sqlite3.Connection:
     return conn
 
 
+def migrate_database(conn: sqlite3.Connection) -> None:
+    """Apply safe, backward-compatible incremental schema additions to existing databases."""
+    # 1. Add target_host column to alerts if missing
+    table_info = conn.execute("PRAGMA table_info(alerts)").fetchall()
+    columns = {r["name"] for r in table_info}
+    if "target_host" not in columns:
+        conn.execute("ALTER TABLE alerts ADD COLUMN target_host TEXT")
+        # Backfill target_host from evidence events where available
+        conn.execute("""
+            UPDATE alerts SET target_host = (
+                SELECT e.host FROM events e
+                JOIN alert_evidence ae ON ae.event_id = e.id
+                WHERE ae.alert_id = alerts.id AND e.host IS NOT NULL
+                LIMIT 1
+            ) WHERE target_host IS NULL
+        """)
+        conn.commit()
+
+    # 2. Ensure alert_status_history table and index exist
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alert_status_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_id    INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+            old_status  TEXT    NOT NULL,
+            new_status  TEXT    NOT NULL CHECK(new_status IN ('new','investigating','resolved','false_positive')),
+            changed_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            actor       TEXT    NOT NULL DEFAULT 'SOC Analyst',
+            reason      TEXT    NOT NULL DEFAULT ''
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_alert_id ON alert_status_history(alert_id)")
+    conn.commit()
+
+
 def init_db(db_path: str = "threatlens.db") -> sqlite3.Connection:
     """Create the database and all tables if they do not already exist."""
     conn = get_connection(db_path)
     conn.executescript(SCHEMA_SQL)
+    migrate_database(conn)
     conn.commit()
     return conn
 
@@ -194,9 +242,15 @@ def check_database_integrity(conn: sqlite3.Connection) -> Dict[str, Any]:
 def get_database_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
     """Retrieve operational telemetry and storage statistics for SOC reporting."""
     table_counts = {}
-    for tbl in ["log_files", "events", "alerts", "alert_evidence", "incidents", "incident_notes", "endpoint_events"]:
-        row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
-        table_counts[tbl] = row["n"] if row else 0
+    for tbl in [
+        "log_files", "events", "alerts", "alert_evidence",
+        "alert_status_history", "incidents", "incident_notes", "endpoint_events"
+    ]:
+        try:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
+            table_counts[tbl] = row["n"] if row else 0
+        except sqlite3.OperationalError:
+            table_counts[tbl] = 0
 
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]

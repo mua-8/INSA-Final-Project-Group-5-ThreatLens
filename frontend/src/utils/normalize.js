@@ -30,6 +30,7 @@ export const normalizeAlert = (a = {}) => ({
   type: pick(a, ["rule_name", "alert_type", "type", "rule", "name", "message"], "Security Alert"),
   severity: capitalize(pick(a, ["severity", "level", "priority"], "low")),
   sourceIp: pick(a, ["source_ip", "src_ip", "ip", "ip_address", "attacker_ip"], "-"),
+  targetHost: pick(a, ["target_host", "targetHost", "host"], "server"),
   status: capitalize(pick(a, ["status", "state"], "new")),
   summary: a.summary || "",
   explanation: a.explanation || "",
@@ -56,39 +57,58 @@ export const toTime = (ts) => {
   return Number.isNaN(t) ? null : t;
 };
 
-export const formatTimestamp = (ts) => {
-  const t = toTime(ts);
-  return t === null ? String(ts || "-") : new Date(t).toLocaleString();
+export const formatUtcTimestamp = (ts) => {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
+  const pad = (n) => String(n).padStart(2, "0");
+  const year = d.getUTCFullYear();
+  const month = pad(d.getUTCMonth() + 1);
+  const day = pad(d.getUTCDate());
+  const hours = pad(d.getUTCHours());
+  const minutes = pad(d.getUTCMinutes());
+  const seconds = pad(d.getUTCSeconds());
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
 };
+
+export const formatTimestamp = (ts) => formatUtcTimestamp(ts);
 
 export const sortRecent = (rows) =>
   [...rows].sort((a, b) => (toTime(b.timestamp) ?? 0) - (toTime(a.timestamp) ?? 0));
 
-// Group rows into time buckets sized to the data's time range.
+// Group rows into zero-filled continuous time buckets sized to the data's range.
 const bucketize = (rows) => {
   const times = rows.map((r) => toTime(r.timestamp)).filter((t) => t !== null);
   if (!times.length) return [];
   const min = Math.min(...times);
   const max = Math.max(...times);
-  const range = max - min;
+  const range = Math.max(max - min, 3600000); // at least 1h
   const MIN = 60000, HOUR = 3600000, DAY = 86400000;
-  const size = range <= 2 * HOUR ? 5 * MIN : range <= 2 * DAY ? HOUR : DAY;
+  const size = range <= 2 * HOUR ? 5 * MIN : range <= 2 * DAY ? 2 * HOUR : DAY;
+
+  const start = Math.floor(min / size) * size;
+  const end = Math.floor(max / size) * size;
+
   const counts = new Map();
+  // Fill all buckets with 0 so inactive periods clearly show zero activity
+  for (let t = start; t <= end; t += size) {
+    counts.set(t, 0);
+  }
   times.forEach((t) => {
     const k = Math.floor(t / size) * size;
     counts.set(k, (counts.get(k) || 0) + 1);
   });
+
+  const pad = (n) => String(n).padStart(2, "0");
   return [...counts.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([k, count]) => {
       const d = new Date(k);
       const label =
-        size === DAY
-          ? d.toLocaleDateString([], { month: "short", day: "numeric" })
-          : size === HOUR && range > DAY
-          ? d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-          : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      return { label, count };
+        size >= DAY
+          ? `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} UTC`
+          : `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+      return { label, count, timestamp: d.toISOString() };
     });
 };
 
@@ -145,24 +165,62 @@ export const buildDashboardModel = (rawStats, rawEvents, rawAlerts) => {
     .filter((s) => ["High", "Critical"].includes(s.name))
     .reduce((n, s) => n + s.count, 0);
 
+  const criticalOnly = alerts.filter((a) => a.severity === "Critical").length;
+  const highOnly = alerts.filter((a) => a.severity === "High").length;
+  const openCount = alerts.filter((a) => !["Resolved", "Closed", "False Positive", "False_positive"].includes(a.status)).length;
+  const resolvedCount = alerts.filter((a) => ["Resolved", "Closed", "False Positive", "False_positive"].includes(a.status)).length;
+
   const summary = {
     totalEvents: Number(pick(stats, ["total_events", "events_total", "event_count"], events.length)),
     totalAlerts: Number(pick(stats, ["total_alerts", "alerts_total", "alert_count"], alerts.length)),
+    openAlerts: Number(pick(stats, ["open_alerts"], openCount)),
+    resolvedAlerts: Number(pick(stats, ["resolved_alerts"], resolvedCount)),
+    criticalAlerts: Number(pick(stats, ["critical_alerts"], criticalOnly)),
+    highAlerts: Number(pick(stats, ["high_alerts"], highOnly)),
     highSeverity: Number(
-      pick(stats, ["high_severity_alerts", "high_severity", "high_alerts"], sevHigh || highCount)
+      pick(stats, ["high_and_critical_alerts", "high_severity_alerts", "high_severity", "high_alerts"], sevHigh || highCount)
     ),
     uniqueIps: Number(
       pick(stats, ["unique_source_ips", "unique_ips", "unique_sources", "unique_ip_count"], uniqueIps)
     ),
   };
 
+  // Prioritize server-side zero-filled timeseries across the whole dataset
+  let eventsTimeline = [];
+  if (Array.isArray(stats.events_timeline) && stats.events_timeline.length > 0) {
+    eventsTimeline = stats.events_timeline.map((b) => ({
+      label: b.label,
+      count: b.count,
+      timestamp: b.iso,
+    }));
+  } else {
+    eventsTimeline = bucketize(events);
+  }
+
+  let alertTrend = [];
+  if (Array.isArray(stats.alert_trend) && stats.alert_trend.length > 0) {
+    alertTrend = stats.alert_trend.map((b) => ({
+      label: b.label,
+      count: b.count,
+      timestamp: b.iso,
+    }));
+  } else if (Array.isArray(stats.alerts_timeline) && stats.alerts_timeline.length > 0) {
+    alertTrend = stats.alerts_timeline.map((b) => ({
+      label: b.label,
+      count: b.count,
+      timestamp: b.iso,
+    }));
+  } else {
+    alertTrend = bucketize(alerts);
+  }
+
   return {
     summary,
     severity,
     topIps,
-    eventsTimeline: bucketize(events),
-    alertTrend: bucketize(alerts),
-    alerts: alerts.slice(0, 10),
-    events: events.slice(0, 10),
+    eventsTimeline,
+    alertTrend,
+    alerts,
+    events,
   };
 };

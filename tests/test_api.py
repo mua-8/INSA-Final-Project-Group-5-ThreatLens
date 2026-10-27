@@ -159,15 +159,39 @@ class TestThreatLensAPI(unittest.TestCase):
         self.assertEqual(data["data"]["evidence"][0]["id"], self.event_ids[0])
 
     def test_update_alert_status(self):
-        # Update to investigating
+        # Update to investigating with actor and reason
         resp = self.client.patch(
             f"/api/alerts/{self.alert_id}/status",
-            json={"status": "investigating"},
+            json={
+                "status": "investigating",
+                "actor": "Incident Responder Alice",
+                "reason": "Reviewing auth logs for brute force pattern",
+            },
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertTrue(data["ok"])
         self.assertEqual(data["data"]["status"], "investigating")
+        self.assertEqual(data["data"]["actor"], "Incident Responder Alice")
+        self.assertEqual(data["data"]["reason"], "Reviewing auth logs for brute force pattern")
+        self.assertEqual(len(data["data"]["status_history"]), 1)
+        self.assertEqual(data["data"]["status_history"][0]["old_status"], "new")
+        self.assertEqual(data["data"]["status_history"][0]["new_status"], "investigating")
+
+        # Test GET /api/alerts/<id>/history
+        resp_hist = self.client.get(f"/api/alerts/{self.alert_id}/history")
+        self.assertEqual(resp_hist.status_code, 200)
+        hist_data = resp_hist.get_json()
+        self.assertTrue(hist_data["ok"])
+        self.assertEqual(len(hist_data["data"]["status_history"]), 1)
+        self.assertEqual(hist_data["data"]["status_history"][0]["actor"], "Incident Responder Alice")
+
+        # Test GET /api/alerts/<id> includes status_history and target_host (derived from evidence)
+        resp_alert = self.client.get(f"/api/alerts/{self.alert_id}")
+        self.assertEqual(resp_alert.status_code, 200)
+        alert_body = resp_alert.get_json()
+        self.assertEqual(alert_body["data"]["target_host"], "web01")
+        self.assertEqual(len(alert_body["data"]["status_history"]), 1)
 
         # Verify invalid status is rejected
         resp_bad = self.client.patch(
@@ -263,6 +287,30 @@ class TestThreatLensAPI(unittest.TestCase):
             self.assertEqual(resp2.status_code, 200)
             data2 = resp2.get_json()
             self.assertTrue(data2["data"]["duplicate"])
+
+
+    def test_statistics_enrichment_and_zero_filled_timeseries(self):
+        resp = self.client.get("/api/statistics")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()["data"]
+        # Core metric checks
+        self.assertIn("open_alerts", data)
+        self.assertIn("resolved_alerts", data)
+        self.assertIn("critical_alerts", data)
+        self.assertIn("high_alerts", data)
+        self.assertIn("high_and_critical_alerts", data)
+        self.assertEqual(data["high_and_critical_alerts"], data["high_alerts"] + data["critical_alerts"])
+        # Timeseries buckets check
+        self.assertIn("events_timeline", data)
+        self.assertIn("alert_trend", data)
+        self.assertIsInstance(data["events_timeline"], list)
+        self.assertIsInstance(data["alert_trend"], list)
+        if len(data["events_timeline"]) > 1:
+            # Verify continuous equidistant buckets without gaps
+            step = data["events_timeline"][1]["epoch"] - data["events_timeline"][0]["epoch"]
+            for i in range(1, len(data["events_timeline"])):
+                diff = data["events_timeline"][i]["epoch"] - data["events_timeline"][i - 1]["epoch"]
+                self.assertEqual(diff, step, "Timeline buckets must be continuous and zero-filled")
 
 
 if __name__ == "__main__":

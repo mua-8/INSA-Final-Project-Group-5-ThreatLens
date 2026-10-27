@@ -13,6 +13,7 @@ export default function AlertsTable({ alerts = [], onSelectAlert }) {
       const matchSearch =
         search === "" ||
         (a.sourceIp && a.sourceIp.toLowerCase().includes(search.toLowerCase())) ||
+        (a.targetHost && a.targetHost.toLowerCase().includes(search.toLowerCase())) ||
         (a.type && a.type.toLowerCase().includes(search.toLowerCase())) ||
         (a.ruleId && a.ruleId.toLowerCase().includes(search.toLowerCase()));
 
@@ -32,12 +33,12 @@ export default function AlertsTable({ alerts = [], onSelectAlert }) {
     },
     {
       key: "timestamp",
-      label: "Detected At",
+      label: "Detected At (UTC)",
       render: (r) => <span className="font-mono text-xs text-slate-300">{formatTimestamp(r.timestamp)}</span>,
     },
     {
       key: "type",
-      label: "Rule / Alert Type",
+      label: "Detection Rule / Alert",
       render: (r) => (
         <div>
           <span className="font-semibold text-white">{r.type}</span>
@@ -49,6 +50,15 @@ export default function AlertsTable({ alerts = [], onSelectAlert }) {
       key: "severity",
       label: "Severity",
       render: (r) => <SeverityBadge severity={r.severity} />,
+    },
+    {
+      key: "targetHost",
+      label: "Target Host",
+      render: (r) => (
+        <span className="font-mono text-xs text-emerald-400 font-medium">
+          {r.targetHost || "server"}
+        </span>
+      ),
     },
     {
       key: "sourceIp",
@@ -88,7 +98,7 @@ export default function AlertsTable({ alerts = [], onSelectAlert }) {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter alerts by IP, rule, or type..."
+            placeholder="Filter alerts by host, IP, rule, or type..."
             className="w-full rounded-lg border border-slate-700 bg-slate-900/60 pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-accent focus:outline-none"
           />
         </div>
@@ -110,7 +120,7 @@ export default function AlertsTable({ alerts = [], onSelectAlert }) {
       </div>
 
       <DataTable
-        title="Detected Threat Alerts (Click row to inspect evidence & triage)"
+        title="Correlated Security Alerts"
         count={filteredAlerts.length}
         columns={columns}
         rows={filteredAlerts}

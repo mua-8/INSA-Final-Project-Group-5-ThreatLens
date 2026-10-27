@@ -6,7 +6,7 @@ const PRESET_ATTACKS = [
   {
     name: "Brute Force SSH (10 attempts)",
     rule: "DR-01",
-    filename: "attack_brute_force_10.log",
+    filename: "scenario_brute_force_10.log",
     description: "10 rapid failed password attempts from 192.168.1.105 targeting root and admin.",
     sample: `Oct 25 10:00:01 server sshd[1234]: Failed password for invalid user root from 192.168.1.105 port 54321 ssh2
 Oct 25 10:00:03 server sshd[1235]: Failed password for invalid user admin from 192.168.1.105 port 54322 ssh2
@@ -21,18 +21,18 @@ Oct 25 10:00:20 server sshd[1243]: Failed password for invalid user support from
   },
   {
     name: "Direct Root Login Attempt",
-    rule: "DR-03",
-    filename: "attack_root_login.log",
-    description: "High severity policy violation: Direct root login accepted from remote IP 203.0.113.77.",
+    rule: "DR-05",
+    filename: "scenario_root_login.log",
+    description: "High severity policy violation: Direct root login attempted from remote IP 203.0.113.77.",
     sample: `Oct 24 14:00:00 web01 sshd[9000]: Failed password for root from 203.0.113.77 port 45000 ssh2
 Oct 24 14:00:30 web01 sshd[9001]: Failed password for root from 203.0.113.77 port 45001 ssh2
 Oct 24 14:01:10 web01 sshd[9002]: Accepted password for root from 203.0.113.77 port 45002 ssh2`,
   },
   {
     name: "Password Spraying Campaign",
-    rule: "DR-02",
-    filename: "attack_password_spraying.log",
-    description: "Attacker attempts 1 common password across multiple corporate accounts.",
+    rule: "DR-03",
+    filename: "scenario_password_spraying.log",
+    description: "Attacker attempts 1 common password across multiple distinct corporate accounts.",
     sample: `Oct 24 14:00:00 web01 sshd[7000]: Failed password for alice from 198.51.100.42 port 43000 ssh2
 Oct 24 14:00:15 web01 sshd[7001]: Failed password for bob from 198.51.100.42 port 43001 ssh2
 Oct 24 14:00:30 web01 sshd[7002]: Failed password for charlie from 198.51.100.42 port 43002 ssh2
@@ -42,8 +42,8 @@ Oct 24 14:01:00 web01 sshd[7004]: Failed password for eve from 198.51.100.42 por
   {
     name: "Compromise (Success After Failures)",
     rule: "DR-04",
-    filename: "attack_success_after_failures.log",
-    description: "6 failed login attempts followed immediately by a successful breach.",
+    filename: "scenario_success_after_failures.log",
+    description: "6 failed login attempts followed immediately by a successful authentication.",
     sample: `Oct 24 14:00:00 web01 sshd[8000]: Failed password for svc_backup from 198.51.100.99 port 44000 ssh2
 Oct 24 14:00:20 web01 sshd[8001]: Failed password for svc_backup from 198.51.100.99 port 44001 ssh2
 Oct 24 14:00:40 web01 sshd[8002]: Failed password for svc_backup from 198.51.100.99 port 44002 ssh2
@@ -120,11 +120,11 @@ export default function IngestModal({ onClose, onRefresh }) {
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-semibold text-accent uppercase tracking-wider">
-                  Live Attack Injection
+                  Telemetry Ingestion & Simulation
                 </span>
               </div>
               <h2 className="text-lg font-bold text-white">
-                Log Ingestion & Attack Simulator
+                Log Ingestion & Test Scenarios
               </h2>
             </div>
           </div>
@@ -147,7 +147,7 @@ export default function IngestModal({ onClose, onRefresh }) {
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            1-Click Preset Attack Scenarios
+            Preset Test Scenarios
           </button>
           <button
             onClick={() => setActiveTab("custom")}
@@ -157,7 +157,7 @@ export default function IngestModal({ onClose, onRefresh }) {
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            Custom File / Text Upload
+            Custom Log Upload
           </button>
         </div>
 
@@ -212,7 +212,7 @@ export default function IngestModal({ onClose, onRefresh }) {
           {activeTab === "preset" ? (
             <div className="space-y-3">
               <p className="text-xs text-slate-400">
-                Click any scenario below to trigger a live attack injection. The payload will be sent to <code className="font-mono text-accent">POST /api/ingest</code>, parsed, evaluated by the detection engine, and inserted into SQLite.
+                Click any scenario below to evaluate authentication log patterns through the ingestion pipeline and detection engine.
               </p>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -238,7 +238,7 @@ export default function IngestModal({ onClose, onRefresh }) {
                       className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-accent/20 px-3 py-2 text-xs font-semibold text-accent border border-accent/30 transition hover:bg-accent hover:text-primary disabled:opacity-50"
                     >
                       <FaBolt size={12} />
-                      {loading ? "Simulating..." : "Inject Attack Scenario"}
+                      {loading ? "Evaluating..." : "Run Test Scenario"}
                     </button>
                   </div>
                 ))}
@@ -289,7 +289,7 @@ export default function IngestModal({ onClose, onRefresh }) {
                 className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-bold text-primary transition hover:bg-sky-300 disabled:opacity-50"
               >
                 <FaCloudUploadAlt size={16} />
-                {loading ? "Uploading & Processing..." : "Upload & Ingest to SQLite"}
+                {loading ? "Processing..." : "Upload & Ingest Logs"}
               </button>
             </div>
           )}
@@ -299,7 +299,7 @@ export default function IngestModal({ onClose, onRefresh }) {
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-slate-700/80 px-6 py-3 bg-slate-900/60">
           <div className="text-xs text-slate-400">
-            Backend Endpoint: <span className="font-mono text-slate-300">POST /api/ingest</span>
+            Ingestion Pipeline Active
           </div>
           <button
             onClick={onClose}

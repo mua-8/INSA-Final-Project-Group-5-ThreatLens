@@ -29,7 +29,7 @@ export default function Header({
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              SSH Attack Monitoring • Module B Backend (SQLite WAL)
+              SSH Threat Monitoring & Incident Response
             </p>
           </div>
         </div>
@@ -37,34 +37,34 @@ export default function Header({
         {/* Action Controls & Telemetry */}
         <div className="flex flex-wrap items-center gap-3 text-sm">
           
-          {/* Module B Verification & Tester Center Button */}
+          {/* System Diagnostics & Verification Button */}
           <button
             onClick={onOpenTesterCenter}
-            title="Open Interactive Test Suite, SQLi Fuzzer, and API Explorer"
+            title="Open System Diagnostics, Security Controls Verification, and API Explorer"
             className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 active:scale-95"
           >
             <FaVial size={12} className="text-purple-200" />
-            <span>Tester Center (81 Tests & SQLi)</span>
+            <span>System Diagnostics</span>
           </button>
 
-          {/* Ingest / Simulate Attack Button */}
+          {/* Log Ingestion Modal Button */}
           <button
             onClick={onOpenIngest}
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-sky-300 shadow-md shadow-accent/20 active:scale-95"
           >
             <FaBolt size={12} />
-            <span>Ingest / Attack Sim</span>
+            <span>Log Ingestion</span>
           </button>
 
           {/* Database Health Badge / Modal Trigger */}
           <button
             onClick={onOpenDbHealth}
-            title="Inspect Module B SQLite Database Integrity & WAL Mode"
+            title="Inspect Database Integrity, Storage Telemetry, and Architecture Controls"
             className="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-200 transition hover:border-accent hover:text-white"
           >
             <FaDatabase size={12} className="text-emerald-400" />
             <span className="hidden sm:inline">DB:</span>
-            <span className="font-mono text-emerald-400 font-semibold">WAL Active</span>
+            <span className="font-mono text-emerald-400 font-semibold">Database Connected</span>
           </button>
 
           {/* Connection status indicator */}

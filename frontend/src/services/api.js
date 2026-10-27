@@ -30,8 +30,13 @@ export const getAlertDetails = async (id) => {
   return res.data;
 };
 
-export const updateAlertStatus = async (id, status) => {
-  const res = await client.patch(`/api/alerts/${id}/status`, { status });
+export const updateAlertStatus = async (id, status, actor = "SOC Analyst", reason = "") => {
+  const res = await client.patch(`/api/alerts/${id}/status`, { status, actor, reason });
+  return res.data;
+};
+
+export const getAlertHistory = async (id) => {
+  const res = await client.get(`/api/alerts/${id}/history`);
   return res.data;
 };
 
@@ -63,6 +68,11 @@ export const getIncidents = async () => {
   return res.data;
 };
 
+export const getIncidentDetails = async (id) => {
+  const res = await client.get(`/api/incidents/${id}`);
+  return res.data;
+};
+
 export const createIncident = async (payload) => {
   const res = await client.post("/api/incidents", payload);
   return res.data;
@@ -73,7 +83,7 @@ export const updateIncidentStatus = async (id, status) => {
   return res.data;
 };
 
-export const addIncidentNote = async (id, note, author = "Adnan (Lead Analyst)") => {
+export const addIncidentNote = async (id, note, author = "SOC Analyst") => {
   const res = await client.post(`/api/incidents/${id}/notes`, { note, author });
   return res.data;
 };
@@ -83,9 +93,14 @@ export const getIncidentNotes = async (id) => {
   return res.data;
 };
 
-// Module B Interactive Verification Endpoints
-export const runSystemTests = async () => {
-  const res = await client.post("/api/system/tests/run");
+// Interactive Diagnostic & Security Verification Endpoints
+export const getSystemRoutes = async () => {
+  const res = await client.get("/api/system/routes");
+  return res.data;
+};
+
+export const runSystemTests = async (target = "all") => {
+  const res = await client.post("/api/system/tests/run", { target });
   return res.data;
 };
 

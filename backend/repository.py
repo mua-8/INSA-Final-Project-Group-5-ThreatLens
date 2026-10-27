@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -175,15 +175,16 @@ def insert_alert(conn: sqlite3.Connection, alert: Dict[str, Any]) -> int:
     """Insert one alert row.  Returns the new row id."""
     cur = conn.execute(
         """INSERT INTO alerts
-           (rule_id, rule_name, severity, status, source_ip,
+           (rule_id, rule_name, severity, status, source_ip, target_host,
             first_seen, last_seen, summary, explanation, settings)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             alert["rule_id"],
             alert["rule_name"],
             alert["severity"],
             alert.get("status", "new"),
             alert["source_ip"],
+            alert.get("target_host"),
             alert["first_seen"],
             alert["last_seen"],
             alert["summary"],
@@ -196,27 +197,59 @@ def insert_alert(conn: sqlite3.Connection, alert: Dict[str, Any]) -> int:
 
 def update_alert(conn: sqlite3.Connection, alert_id: int,
                  severity: str, last_seen: str, summary: str,
-                 explanation: str) -> None:
+                 explanation: str, target_host: Optional[str] = None) -> None:
     """Update mutable fields of an existing alert (evidence-driven update)."""
-    conn.execute(
-        """UPDATE alerts SET severity=?, last_seen=?, summary=?, explanation=?,
-           updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-           WHERE id=?""",
-        (severity, last_seen, summary, explanation, alert_id),
-    )
+    if target_host is not None:
+        conn.execute(
+            """UPDATE alerts SET severity=?, last_seen=?, summary=?, explanation=?, target_host=?,
+               updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               WHERE id=?""",
+            (severity, last_seen, summary, explanation, target_host, alert_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE alerts SET severity=?, last_seen=?, summary=?, explanation=?,
+               updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               WHERE id=?""",
+            (severity, last_seen, summary, explanation, alert_id),
+        )
 
 
-def update_alert_status(conn: sqlite3.Connection, alert_id: int, status: str) -> bool:
-    """Set alert status.  Returns True if a row was found."""
+def update_alert_status(conn: sqlite3.Connection, alert_id: int, status: str,
+                        actor: str = "SOC Analyst", reason: str = "") -> bool:
+    """Set alert status and record status audit trail. Returns True if a row was found."""
     valid = {"new", "investigating", "resolved", "false_positive"}
     if status not in valid:
         raise ValueError(f"status must be one of {sorted(valid)}")
+
+    row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+    if not row:
+        return False
+    old_status = row["status"]
+
     cur = conn.execute(
         """UPDATE alerts SET status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
            WHERE id=?""",
         (status, alert_id),
     )
-    return cur.rowcount > 0
+    if cur.rowcount > 0:
+        conn.execute(
+            """INSERT INTO alert_status_history (alert_id, old_status, new_status, actor, reason)
+               VALUES (?, ?, ?, ?, ?)""",
+            (alert_id, old_status, status, (actor or "SOC Analyst").strip(), (reason or "").strip()),
+        )
+        return True
+    return False
+
+
+def get_alert_status_history(conn: sqlite3.Connection, alert_id: int) -> List[sqlite3.Row]:
+    """Return chronological status audit history for an alert."""
+    return conn.execute(
+        """SELECT * FROM alert_status_history
+           WHERE alert_id = ?
+           ORDER BY changed_at ASC, id ASC""",
+        (alert_id,),
+    ).fetchall()
 
 
 def get_alert(conn: sqlite3.Connection, alert_id: int) -> Optional[sqlite3.Row]:
@@ -225,7 +258,7 @@ def get_alert(conn: sqlite3.Connection, alert_id: int) -> Optional[sqlite3.Row]:
 
 def list_alerts(conn: sqlite3.Connection, status: Optional[str] = None,
                 severity: Optional[str] = None, rule_id: Optional[str] = None,
-                source_ip: Optional[str] = None,
+                source_ip: Optional[str] = None, target_host: Optional[str] = None,
                 limit: int = 100, offset: int = 0) -> List[sqlite3.Row]:
     clauses, params = [], []
     if status:
@@ -240,6 +273,9 @@ def list_alerts(conn: sqlite3.Connection, status: Optional[str] = None,
     if source_ip:
         clauses.append("source_ip = ?")
         params.append(source_ip)
+    if target_host:
+        clauses.append("target_host = ?")
+        params.append(target_host)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params += [limit, offset]
     return conn.execute(
@@ -253,6 +289,82 @@ def count_alerts_by_severity(conn: sqlite3.Connection) -> Dict[str, int]:
         "SELECT severity, COUNT(*) AS n FROM alerts GROUP BY severity"
     ).fetchall()
     return {r["severity"]: r["n"] for r in rows}
+
+
+def count_alerts_by_status(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Return counts of alerts grouped by operational triage status."""
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM alerts GROUP BY status"
+    ).fetchall()
+    return {r["status"]: r["n"] for r in rows}
+
+
+def get_timeseries_buckets(
+    conn: sqlite3.Connection,
+    table: str = "events",
+    target_buckets: int = 24,
+) -> List[Dict[str, Any]]:
+    """Generate time-series buckets with zero-filled gaps across all records in table."""
+    valid_tables = {"events": "timestamp", "alerts": "last_seen"}
+    if table not in valid_tables:
+        raise ValueError(f"Invalid table for timeseries: {table}")
+    col = valid_tables[table]
+
+    rows = conn.execute(
+        f"SELECT {col} FROM {table} WHERE {col} IS NOT NULL ORDER BY {col} ASC"
+    ).fetchall()
+    if not rows:
+        return []
+
+    def _parse_ts(val: str) -> Optional[int]:
+        try:
+            val_clean = val.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(val_clean)
+            return int(dt.timestamp())
+        except Exception:
+            return None
+
+    epochs = [_parse_ts(r[0]) for r in rows if _parse_ts(r[0]) is not None]
+    if not epochs:
+        return []
+
+    min_ts, max_ts = min(epochs), max(epochs)
+    range_sec = max(max_ts - min_ts, 3600)  # at least 1 hour span
+
+    standard_sizes = [60, 300, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400]
+    bucket_sec = 86400
+    for s in standard_sizes:
+        if range_sec / s <= target_buckets:
+            bucket_sec = s
+            break
+
+    start_bucket = (min_ts // bucket_sec) * bucket_sec
+    end_bucket = (max_ts // bucket_sec) * bucket_sec
+
+    # Zero-fill all buckets in the span
+    bucket_counts: Dict[int, int] = {
+        b: 0 for b in range(start_bucket, end_bucket + bucket_sec, bucket_sec)
+    }
+    for t in epochs:
+        b = (t // bucket_sec) * bucket_sec
+        if b in bucket_counts:
+            bucket_counts[b] += 1
+
+    results = []
+    use_date = bucket_sec >= 86400 or range_sec > 86400
+    for b in sorted(bucket_counts.keys()):
+        dt = datetime.fromtimestamp(b, tz=timezone.utc)
+        if use_date:
+            label = dt.strftime("%b %d, %H:%M UTC")
+        else:
+            label = dt.strftime("%H:%M UTC")
+        results.append({
+            "epoch": b,
+            "iso": dt.isoformat(),
+            "label": label,
+            "count": bucket_counts[b],
+        })
+    return results
 
 
 # --------------------------------------------------------------------------

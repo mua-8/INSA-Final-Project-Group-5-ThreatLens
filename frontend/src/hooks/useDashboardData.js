@@ -24,7 +24,7 @@ export default function useDashboardData() {
 
   const fetchEndpointEvents = useCallback(async () => {
     try {
-      const response = await getEndpointEvents({ limit: 100 });
+      const response = await getEndpointEvents({ limit: 500 });
 
       if (!mounted.current) return;
 
@@ -57,8 +57,8 @@ export default function useDashboardData() {
     try {
       const [stats, events, alerts] = await Promise.all([
         getStatistics(),
-        getEvents(),
-        getAlerts(),
+        getEvents({ limit: 500 }),
+        getAlerts({ limit: 500 }),
       ]);
 
       if (!mounted.current) return;

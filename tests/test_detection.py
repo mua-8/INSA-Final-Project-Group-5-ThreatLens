@@ -72,10 +72,18 @@ def alert_for(engine, rule_id):
 
 class AcceptanceTests(unittest.TestCase):
     def test_ac01_clean_baseline_raises_zero_alerts(self):
-        parsed = parse_file(str(SAMPLES / "baseline.log"), YEAR)
+        baseline_path = SAMPLES / "baseline.log"
+        self.assertTrue(baseline_path.exists(), f"Missing required test fixture: {baseline_path}")
+        parsed = parse_file(str(baseline_path), YEAR)
+        self.assertGreater(len(parsed.events), 15, "Baseline fixture must contain parsed events")
+        self.assertEqual(parsed.malformed_count, 0)
         engine = DetectionEngine()
         engine.process(parsed.events)
         self.assertEqual(engine.alerts, [])
+
+    def test_missing_fixture_raises_filenotfounderror(self):
+        with self.assertRaises(FileNotFoundError):
+            parse_file(str(SAMPLES / "non_existent_log_fixture.log"), YEAR)
 
     def test_ac02_ten_failures_in_two_minutes_gives_one_alert_with_ten_events(self):
         engine = run(*[(i * 12, "fail", "deploy", "203.0.113.50") for i in range(10)])

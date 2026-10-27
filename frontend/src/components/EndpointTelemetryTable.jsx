@@ -1,20 +1,12 @@
 import DataTable from "./DataTable.jsx";
 import { SeverityBadge } from "./Badges.jsx";
-
-function formatTimestamp(value) {
-  if (!value) return "-";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleString();
-}
+import { formatTimestamp } from "../utils/normalize.js";
 
 export default function EndpointTelemetryTable({ events = [], loading = false }) {
   const columns = [
     {
       key: "timestamp",
-      label: "TIMESTAMP",
+      label: "TIMESTAMP (UTC)",
       render: (event) => (
         <span className="text-xs text-slate-300">
           {formatTimestamp(event.timestamp)}
@@ -37,7 +29,7 @@ export default function EndpointTelemetryTable({ events = [], loading = false })
     },
     {
       key: "severity",
-      label: "SEVERITY",
+      label: "ENDPOINT SEVERITY",
       render: (event) => <SeverityBadge severity={event.severity} />,
     },
     {
@@ -58,6 +50,7 @@ export default function EndpointTelemetryTable({ events = [], loading = false })
       count={events.length}
       columns={columns}
       rows={events}
+      pageSize={10}
       emptyText={
         loading
           ? "Loading endpoint telemetry..."

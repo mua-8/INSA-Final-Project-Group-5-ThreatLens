@@ -33,10 +33,16 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
 import traceback
 from typing import Any, Dict, List, Optional
 import uuid
+import xml.etree.ElementTree as ET
 
 from flask import Flask, jsonify, request, g
 
@@ -215,10 +221,15 @@ def _hydrate_engine_from_db(db_path: str, engine) -> None:
             if last_seen.tzinfo is None:
                 last_seen = last_seen.replace(tzinfo=timezone.utc)
 
+            target_host = ar["target_host"] if "target_host" in ar.keys() else None
+            if not target_host:
+                target_host = next((getattr(e, "host", None) for e in evidence_events.values() if getattr(e, "host", None)), None)
+
             alert = Alert(
                 rule_id=ar["rule_id"],
                 rule_name=ar["rule_name"],
                 source_ip=ar["source_ip"],
+                target_host=target_host,
                 settings=settings,
                 events=evidence_events,
                 id=ar["id"],
@@ -295,12 +306,14 @@ def _sync_endpoint_events_to_siem(conn: sqlite3.Connection, engine) -> None:
                 result = engine.process(new_adapted_events)
                 if result:
                     for alert in result.new_alerts:
+                        target_host = alert.target_host or next((getattr(e, "host", None) for e in alert.events.values() if getattr(e, "host", None)), None)
                         alert_row = {
                             "rule_id": alert.rule_id,
                             "rule_name": alert.rule_name,
                             "severity": alert.severity,
                             "status": alert.status,
                             "source_ip": alert.source_ip,
+                            "target_host": target_host,
                             "first_seen": alert.first_seen.isoformat(),
                             "last_seen": alert.last_seen.isoformat(),
                             "summary": alert.summary,
@@ -323,6 +336,7 @@ def _sync_endpoint_events_to_siem(conn: sqlite3.Connection, engine) -> None:
                                 last_seen=alert.last_seen.isoformat(),
                                 summary=alert.summary,
                                 explanation=alert.explanation,
+                                target_host=alert.target_host,
                             )
                             evidence_db_ids = [
                                 e.id for e in alert.events.values() if hasattr(e, "id") and e.id
@@ -695,12 +709,17 @@ def ingest_endpoint_events():
                     result = engine.process(new_adapted_events)
                     if result:
                         for alert in result.new_alerts:
+                            target_host = alert.target_host or next(
+                                (getattr(e, "host", None) for e in alert.events.values() if getattr(e, "host", None)),
+                                None
+                            )
                             alert_row = {
                                 "rule_id": alert.rule_id,
                                 "rule_name": alert.rule_name,
                                 "severity": alert.severity,
                                 "status": alert.status,
                                 "source_ip": alert.source_ip,
+                                "target_host": target_host,
                                 "first_seen": alert.first_seen.isoformat(),
                                 "last_seen": alert.last_seen.isoformat(),
                                 "summary": alert.summary,
@@ -723,6 +742,7 @@ def ingest_endpoint_events():
                                     last_seen=alert.last_seen.isoformat(),
                                     summary=alert.summary,
                                     explanation=alert.explanation,
+                                    target_host=alert.target_host,
                                 )
                                 evidence_db_ids = [
                                     e.id for e in alert.events.values() if hasattr(e, "id") and e.id
@@ -915,12 +935,17 @@ def ingest():
         new_alert_ids = []
         if result:
             for alert in result.new_alerts:
+                target_host = alert.target_host or next(
+                    (getattr(e, "host", None) for e in alert.events.values() if getattr(e, "host", None)),
+                    None
+                )
                 alert_row = {
                     "rule_id": alert.rule_id,
                     "rule_name": alert.rule_name,
                     "severity": alert.severity,
                     "status": alert.status,
                     "source_ip": alert.source_ip,
+                    "target_host": target_host,
                     "first_seen": alert.first_seen.isoformat(),
                     "last_seen": alert.last_seen.isoformat(),
                     "summary": alert.summary,
@@ -946,6 +971,7 @@ def ingest():
                         last_seen=alert.last_seen.isoformat(),
                         summary=alert.summary,
                         explanation=alert.explanation,
+                        target_host=alert.target_host,
                     )
                     evidence_db_ids = [
                         ev.id for ev in alert.events.values()
@@ -1041,6 +1067,7 @@ def list_alerts():
         severity=request.args.get("severity"),
         rule_id=request.args.get("rule_id"),
         source_ip=request.args.get("source_ip"),
+        target_host=request.args.get("target_host"),
         limit=limit,
         offset=offset,
     )
@@ -1060,8 +1087,13 @@ def get_alert(alert_id: int):
     if alert is None:
         return _err("Alert not found.", 404)
     evidence = repo.get_alert_evidence(conn, alert_id)
+    history = repo.get_alert_status_history(conn, alert_id)
     data = _row(alert)
-    data["evidence"] = _rows(evidence)
+    evidence_rows = _rows(evidence)
+    data["evidence"] = evidence_rows
+    data["status_history"] = _rows(history)
+    if not data.get("target_host"):
+        data["target_host"] = next((ev.get("host") for ev in evidence_rows if ev.get("host")), None)
     return _ok(data)
 
 
@@ -1072,15 +1104,37 @@ def update_alert_status(alert_id: int):
     status = body.get("status", "").strip()
     if not status:
         return _err("'status' field is required.")
+    actor = body.get("actor", "SOC Analyst").strip() or "SOC Analyst"
+    reason = body.get("reason", "").strip()
     conn = get_db()
     try:
-        found = repo.update_alert_status(conn, alert_id, status)
+        found = repo.update_alert_status(conn, alert_id, status, actor=actor, reason=reason)
     except ValueError as exc:
         return _err(str(exc))
     if not found:
         return _err("Alert not found.", 404)
     conn.commit()
-    return _ok({"alert_id": alert_id, "status": status})
+    history = repo.get_alert_status_history(conn, alert_id)
+    return _ok({
+        "alert_id": alert_id,
+        "status": status,
+        "actor": actor,
+        "reason": reason,
+        "status_history": _rows(history),
+    })
+
+
+@app.route("/api/alerts/<int:alert_id>/history", methods=["GET"])
+def get_alert_history(alert_id: int):
+    conn = get_db()
+    alert = repo.get_alert(conn, alert_id)
+    if alert is None:
+        return _err("Alert not found.", 404)
+    history = repo.get_alert_status_history(conn, alert_id)
+    return _ok({
+        "alert_id": alert_id,
+        "status_history": _rows(history),
+    })
 
 
 # --------------------------------------------------------------------------
@@ -1093,9 +1147,25 @@ def statistics():
     conn = get_db()
     stats = repo.auth_statistics(conn)
     alert_sev = repo.count_alerts_by_severity(conn)
+    alert_status = repo.count_alerts_by_status(conn)
     top_ips = _rows(repo.top_source_ips(conn, limit=10))
     total_alerts = sum(alert_sev.values())
-    high_sev = alert_sev.get("high", 0) + alert_sev.get("critical", 0)
+
+    critical_sev = alert_sev.get("critical", 0)
+    high_sev_only = alert_sev.get("high", 0)
+    high_and_critical = high_sev_only + critical_sev
+
+    open_alerts = sum(
+        c for s, c in alert_status.items()
+        if s.lower() in ("new", "investigating", "open", "in_progress")
+    )
+    resolved_alerts = sum(
+        c for s, c in alert_status.items()
+        if s.lower() in ("resolved", "closed", "false_positive")
+    )
+
+    events_timeline = repo.get_timeseries_buckets(conn, table="events", target_buckets=24)
+    alert_trend = repo.get_timeseries_buckets(conn, table="alerts", target_buckets=24)
 
     payload = {
         "total": stats.get("total", 0),
@@ -1107,11 +1177,21 @@ def statistics():
         "unique_source_ips": stats.get("unique_ips", 0),
         "unique_users": stats.get("unique_users", 0),
         "total_alerts": total_alerts,
-        "high_severity": high_sev,
-        "high_severity_alerts": high_sev,
+        "open_alerts": open_alerts,
+        "resolved_alerts": resolved_alerts,
+        "critical_alerts": critical_sev,
+        "high_alerts": high_sev_only,
+        "high_severity": high_and_critical,
+        "high_severity_alerts": high_and_critical,
+        "high_and_critical_alerts": high_and_critical,
         "alert_counts_by_severity": alert_sev,
         "alerts_by_severity": alert_sev,
         "severity_distribution": alert_sev,
+        "alert_counts_by_status": alert_status,
+        "alerts_by_status": alert_status,
+        "events_timeline": events_timeline,
+        "alert_trend": alert_trend,
+        "alerts_timeline": alert_trend,
         "top_source_ips": top_ips,
         "top_ips": top_ips,
     }
@@ -1246,40 +1326,284 @@ def list_incident_notes(incident_id: int):
 
 
 # --------------------------------------------------------------------------
-# System verification & testing endpoints (Module B Interactive Verification)
+# System verification, testing & dynamic route discovery
 # --------------------------------------------------------------------------
+
+ROUTE_DESCRIPTIONS = {
+    "index": "API Root - Pure JSON status and endpoint discovery",
+    "list_alerts": "List security alerts with filtering by severity, status, rule, or host",
+    "get_alert": "Get detailed alert record with correlated evidence",
+    "update_alert_status": "Update alert triage status with analyst attribution and reason",
+    "get_alert_history": "Retrieve persistent audit trail of alert status transitions",
+    "list_events": "List normalized security events with optional filtering",
+    "get_event": "Get normalized event details and line hash",
+    "health": "Production health check, WAL mode, and database telemetry",
+    "list_incidents": "List security incident cases",
+    "create_incident": "Create an incident from selected alerts",
+    "get_incident": "Retrieve incident details, linked alerts, and analyst notes",
+    "link_alert_to_incident": "Link a security alert to an incident case",
+    "add_incident_note": "Add an analyst case note to an incident",
+    "list_incident_notes": "List analyst case notes for an incident",
+    "update_incident_status": "Update incident lifecycle status",
+    "ingest": "Upload and parse raw syslog / auth log files",
+    "list_logs": "List processed log files and verification hashes",
+    "statistics": "Aggregated SOC counts, severity breakdown, and top source IPs",
+    "sqli_fuzz_test": "Interactive SQL injection defense fuzzer testing parameterized queries",
+    "run_system_tests": "Execute automated system test suites in an isolated subprocess",
+    "get_system_routes": "Dynamic REST API route registry and endpoint discovery",
+    "ingest_endpoint_events": "Ingest telemetry event batches from ThreatLens endpoint agents",
+    "list_endpoint_events": "List and filter endpoint agent telemetry events",
+    "get_endpoint_event_detail": "Retrieve endpoint event details by UUID",
+}
+
+ROUTE_SAMPLES = {
+    "/": {"sample_path": "/"},
+    "/api/health": {"sample_path": "/api/health"},
+    "/api/statistics": {"sample_path": "/api/statistics"},
+    "/api/stats": {"sample_path": "/api/stats"},
+    "/api/alerts": {"sample_path": "/api/alerts?limit=5"},
+    "/api/alerts/<int:alert_id>": {
+        "sample_path": "/api/alerts/1",
+        "sample_body": {"status": "investigating", "actor": "SOC Analyst", "reason": "Verifying rule correlation"},
+    },
+    "/api/alerts/<int:alert_id>/status": {
+        "sample_path": "/api/alerts/1/status",
+        "sample_body": {"status": "investigating", "actor": "SOC Analyst", "reason": "Verifying rule correlation"},
+    },
+    "/api/alerts/<int:alert_id>/history": {"sample_path": "/api/alerts/1/history"},
+    "/api/events": {"sample_path": "/api/events?limit=5"},
+    "/api/events/<int:event_id>": {"sample_path": "/api/events/1"},
+    "/api/logs": {"sample_path": "/api/logs"},
+    "/api/incidents": {
+        "sample_path": "/api/incidents",
+        "sample_body": {"title": "Suspicious Authentication Spike", "severity": "high", "description": "Investigating correlated brute-force alert."},
+    },
+    "/api/incidents/<int:incident_id>": {"sample_path": "/api/incidents/1"},
+    "/api/incidents/<int:incident_id>/status": {
+        "sample_path": "/api/incidents/1/status",
+        "sample_body": {"status": "investigating"},
+    },
+    "/api/incidents/<int:incident_id>/alerts": {
+        "sample_path": "/api/incidents/1/alerts",
+        "sample_body": {"alert_id": 1},
+    },
+    "/api/incidents/<int:incident_id>/notes": {
+        "sample_path": "/api/incidents/1/notes",
+        "sample_body": {"note": "Evidence verified against SSH daemon telemetry.", "author": "SOC Analyst"},
+    },
+    "/api/v1/events": {
+        "sample_path": "/api/v1/events?limit=5",
+        "sample_body": {"events": []},
+    },
+    "/api/v1/events/<event_id>": {"sample_path": "/api/v1/events/1"},
+    "/api/system/sqli-fuzz": {
+        "sample_path": "/api/system/sqli-fuzz",
+        "sample_body": {"payload": "' OR 1=1 --", "target": "source_ip"},
+    },
+    "/api/system/tests/run": {"sample_path": "/api/system/tests/run"},
+    "/api/system/routes": {"sample_path": "/api/system/routes"},
+    "/api/routes": {"sample_path": "/api/routes"},
+}
+
+TEST_SUITE_NAMES = {
+    "test_database": "Database Schema, Tables & Cascading Integrity",
+    "test_api": "REST API Endpoints & Contract Adherence",
+    "test_detection": "Detection Engine Rules DR-01..DR-05 & Correlation",
+    "test_security": "SQL Injection Defense & Integrity Benchmark",
+    "test_endpoint_events": "Endpoint Agent Telemetry & Ingestion",
+    "test_ingestion": "Syslog Parsing & Ingestion Service",
+    "test_integration": "End-to-End SIEM Integration Scenarios",
+    "test_openssh_parser": "OpenSSH Auth Log Normalization & Parsing",
+    "test_models": "Data Models & Schema Validation",
+    "test_system_diagnostics": "System Diagnostics & Module B Isolation",
+}
+
+ALLOWLISTED_TEST_TARGETS = {
+    "all": "tests",
+    "database": "tests/test_database.py",
+    "api": "tests/test_api.py",
+    "detection": "tests/test_detection.py",
+    "security": "tests/test_security.py",
+    "endpoint": "tests/test_endpoint_events.py",
+    "ingestion": "tests/test_ingestion.py",
+    "integration": "tests/test_integration.py",
+    "parser": "tests/test_openssh_parser.py",
+    "models": "tests/test_models.py",
+    "diagnostics": "tests/test_system_diagnostics.py",
+}
+
+
+@app.route("/api/system/routes", methods=["GET"])
+@app.route("/api/routes", methods=["GET"])
+def get_system_routes():
+    """Dynamic REST API route registry and endpoint discovery derived from Flask url_map."""
+    try:
+        routes = []
+        for rule in app.url_map.iter_rules():
+            if rule.endpoint == "static":
+                continue
+            methods = sorted(list(rule.methods - {"HEAD", "OPTIONS"}))
+            rule_str = str(rule)
+            fn = app.view_functions.get(rule.endpoint)
+            doc = ""
+            if rule.endpoint in ROUTE_DESCRIPTIONS:
+                doc = ROUTE_DESCRIPTIONS[rule.endpoint]
+            elif fn and fn.__doc__:
+                doc = fn.__doc__.strip().split("\n")[0]
+            else:
+                doc = f"Endpoint handler for {rule.endpoint}"
+
+            sample_info = ROUTE_SAMPLES.get(rule_str, {})
+            sample_path = sample_info.get("sample_path", rule_str)
+            sample_body = sample_info.get("sample_body", None)
+
+            for m in methods:
+                routes.append({
+                    "path": rule_str,
+                    "method": m,
+                    "methods": methods,
+                    "endpoint": rule.endpoint,
+                    "desc": doc,
+                    "sample_path": sample_path,
+                    "sample_body": sample_body if m in ("POST", "PATCH", "PUT") else None,
+                })
+
+        routes.sort(key=lambda r: (r["path"], r["method"]))
+        payload = {
+            "routes": routes,
+            "count": len(routes),
+            "unique_paths": len(set(r["path"] for r in routes)),
+        }
+        res = dict(payload)
+        res["ok"] = True
+        res["data"] = payload
+        return jsonify(res), 200
+    except Exception as exc:
+        return _err(f"Failed to enumerate registered routes: {str(exc)}", 500)
+
 
 @app.route("/api/system/tests/run", methods=["POST", "GET"])
 def run_system_tests():
-    """Execute all 81 automated unit and security tests on demand."""
-    import unittest
-    import io
-    import time
+    """Execute automated system verification tests in an isolated subprocess."""
+    client_ip = request.remote_addr or ""
+    if client_ip not in ("127.0.0.1", "::1", "localhost") and not app.config.get("TESTING"):
+        return _err("Diagnostic test runner is restricted to local loopback authorization.", 403)
 
-    start_time = time.time()
-    stream = io.StringIO()
-    runner = unittest.TextTestRunner(stream=stream, verbosity=1)
-    suite = unittest.TestLoader().discover("tests")
-    result = runner.run(suite)
-    duration = round(time.time() - start_time, 2)
+    req_data = request.get_json(silent=True) or {}
+    target_key = (request.args.get("target") or req_data.get("target") or "all").strip().lower()
+    if target_key not in ALLOWLISTED_TEST_TARGETS:
+        allowed = ", ".join(sorted(ALLOWLISTED_TEST_TARGETS.keys()))
+        return _err(f"Invalid test target '{target_key}'. Allowlisted targets: {allowed}.", 400)
 
-    suites = [
-        {"name": "Database Schema, Tables & Cascading Integrity", "status": "PASSED", "tests": 20},
-        {"name": "14 REST API Endpoints & Contract Adherence", "status": "PASSED", "tests": 19},
-        {"name": "Detection Engine Rules DR-01..DR-05 & Correlation", "status": "PASSED", "tests": 34},
-        {"name": "SQL Injection Fuzzing & Immunity Verification", "status": "PASSED", "tests": 4},
-        {"name": "High-Throughput Batch Performance Benchmark", "status": "PASSED", "tests": 4},
+    test_path = ALLOWLISTED_TEST_TARGETS[target_key]
+
+    temp_dir = tempfile.mkdtemp(prefix="threatlens_test_")
+    xml_path = os.path.join(temp_dir, "junit_report.xml")
+    isolated_db_path = os.path.join(temp_dir, "isolated_threatlens.db")
+
+    env = dict(os.environ)
+    for k in list(env.keys()):
+        if any(s in k.upper() for s in ["KEY", "SECRET", "TOKEN", "PASSWORD", "AUTH"]):
+            env.pop(k, None)
+    env["THREATLENS_DB"] = isolated_db_path
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        test_path,
+        "-q",
+        f"--junitxml={xml_path}",
     ]
 
-    return _ok({
-        "total_tests": result.testsRun,
-        "failures": len(result.failures),
-        "errors": len(result.errors),
-        "passed": result.wasSuccessful(),
+    start_time = time.time()
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=base_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+            shell=False,
+        )
+        duration = round(time.time() - start_time, 2)
+    except subprocess.TimeoutExpired:
+        duration = round(time.time() - start_time, 2)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return _err("System test execution timed out after 45 seconds.", 504)
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return _err(f"Subprocess test execution error: {str(exc)}", 500)
+
+    suites_map = {}
+    total_tests = 0
+    failures = 0
+    errors = 0
+
+    if os.path.exists(xml_path):
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+            for tc in root.iter("testcase"):
+                total_tests += 1
+                classname = tc.get("classname", "")
+                parts = classname.split(".")
+                mod = parts[1] if len(parts) > 1 else parts[0]
+                if mod not in suites_map:
+                    suites_map[mod] = {
+                        "name": TEST_SUITE_NAMES.get(mod, mod.replace("_", " ").title()),
+                        "tests": 0,
+                        "failures": 0,
+                        "errors": 0,
+                        "time": 0.0,
+                    }
+                suites_map[mod]["tests"] += 1
+                suites_map[mod]["time"] = round(suites_map[mod]["time"] + float(tc.get("time", 0.0)), 3)
+                if tc.find("failure") is not None:
+                    suites_map[mod]["failures"] += 1
+                    failures += 1
+                if tc.find("error") is not None:
+                    suites_map[mod]["errors"] += 1
+                    errors += 1
+        except Exception:
+            pass
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    suites_list = []
+    for mod_key, s_data in sorted(suites_map.items()):
+        status = "PASSED" if (s_data["failures"] == 0 and s_data["errors"] == 0) else "FAILED"
+        suites_list.append({
+            "name": s_data["name"],
+            "module": mod_key,
+            "status": status,
+            "tests": s_data["tests"],
+            "failures": s_data["failures"],
+            "errors": s_data["errors"],
+            "duration_seconds": s_data["time"],
+        })
+
+    passed = (proc.returncode == 0) and (failures == 0) and (errors == 0)
+    stdout_lines = proc.stdout.strip().split("\n")
+    summary_line = stdout_lines[-1] if stdout_lines else f"Process exited with status {proc.returncode}"
+
+    payload = {
+        "total_tests": total_tests,
+        "failures": failures,
+        "errors": errors,
+        "passed": passed,
         "duration_seconds": duration,
-        "suites": suites,
-        "output_summary": f"Ran {result.testsRun} tests in {duration}s. Status: {'OK' if result.wasSuccessful() else 'FAILED'}"
-    })
+        "suites": suites_list,
+        "output_summary": summary_line,
+        "exit_code": proc.returncode,
+    }
+    res = dict(payload)
+    res["ok"] = True
+    res["data"] = payload
+    return jsonify(res), 200
 
 
 @app.route("/api/system/sqli-fuzz", methods=["POST"])

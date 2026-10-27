@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   FaTimes,
   FaVial,
@@ -17,6 +17,7 @@ import {
   runSystemTests,
   runSqliFuzz,
   callRawEndpoint,
+  getSystemRoutes,
   getIncidents,
   createIncident,
   addIncidentNote,
@@ -56,29 +57,6 @@ const SQLI_PRESETS = [
   },
 ];
 
-const API_ENDPOINTS = [
-  { method: "GET", path: "/api/health", desc: "PRAGMA integrity_check, WAL mode, table record counts" },
-  { method: "GET", path: "/api/statistics", desc: "Aggregated SOC counts, severity breakdown, top IPs" },
-  { method: "GET", path: "/api/alerts?limit=5", desc: "List recent security alerts" },
-  { method: "GET", path: "/api/alerts/1", desc: "Alert #1 with foreign-key correlated syslog evidence" },
-  { method: "GET", path: "/api/events?limit=5", desc: "List recent parsed syslog events" },
-  { method: "GET", path: "/api/events/1", desc: "Event #1 raw syslog inspection and line hash" },
-  { method: "GET", path: "/api/logs", desc: "Audit list of uploaded log files and SHA-256 hashes" },
-  { method: "GET", path: "/api/incidents", desc: "List ongoing security incident cases" },
-  {
-    method: "PATCH",
-    path: "/api/alerts/1/status",
-    body: { status: "investigating" },
-    desc: "Update alert status in SQLite state machine",
-  },
-  {
-    method: "POST",
-    path: "/api/incidents",
-    body: { title: "Suspicious Root Access Surge", severity: "high", description: "Automated test incident" },
-    desc: "Create a new security incident case",
-  },
-];
-
 export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
   const [activeTab, setActiveTab] = useState("tests"); // 'tests' | 'sqli' | 'api' | 'incidents'
 
@@ -94,11 +72,13 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
   const [fuzzing, setFuzzing] = useState(false);
   const [fuzzResult, setFuzzResult] = useState(null);
 
-  // Tab 3: API Explorer State
-  const [selectedEndpoint, setSelectedEndpoint] = useState(API_ENDPOINTS[0]);
-  const [customBody, setCustomBody] = useState(
-    API_ENDPOINTS[0].body ? JSON.stringify(API_ENDPOINTS[0].body, null, 2) : ""
-  );
+  // Tab 3: API Explorer State (Dynamic Route Discovery)
+  const [discoveredRoutes, setDiscoveredRoutes] = useState([]);
+  const [routesLoading, setRoutesLoading] = useState(false);
+  const [routesError, setRoutesError] = useState(null);
+  const [selectedEndpoint, setSelectedEndpoint] = useState(null);
+  const [customPath, setCustomPath] = useState("");
+  const [customBody, setCustomBody] = useState("");
   const [callingApi, setCallingApi] = useState(false);
   const [apiResponse, setApiResponse] = useState(null);
 
@@ -141,7 +121,40 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
     }
   };
 
+  const loadRoutes = async () => {
+    setRoutesLoading(true);
+    setRoutesError(null);
+    try {
+      const res = await getSystemRoutes();
+      const list = res.data?.routes || res.routes || [];
+      setDiscoveredRoutes(list);
+      if (list.length > 0 && !selectedEndpoint) {
+        setSelectedEndpoint(list[0]);
+        setCustomPath(list[0].sample_path || list[0].path);
+        setCustomBody(list[0].sample_body ? JSON.stringify(list[0].sample_body, null, 2) : "");
+      }
+    } catch (err) {
+      setRoutesError(err.message || "Failed to load registered routes from backend.");
+    } finally {
+      setRoutesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "api" && discoveredRoutes.length === 0 && !routesLoading) {
+      loadRoutes();
+    }
+  }, [activeTab]);
+
+  const handleSelectEndpoint = (ep) => {
+    setSelectedEndpoint(ep);
+    setCustomPath(ep.sample_path || ep.path);
+    setCustomBody(ep.sample_body ? JSON.stringify(ep.sample_body, null, 2) : "");
+    setApiResponse(null);
+  };
+
   const handleCallApi = async () => {
+    if (!selectedEndpoint) return;
     setCallingApi(true);
     setApiResponse(null);
     try {
@@ -149,7 +162,8 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
       if (["POST", "PATCH", "PUT"].includes(selectedEndpoint.method) && customBody.trim()) {
         parsedBody = JSON.parse(customBody);
       }
-      const res = await callRawEndpoint(selectedEndpoint.method, selectedEndpoint.path, parsedBody);
+      const targetPath = customPath.trim() || selectedEndpoint.sample_path || selectedEndpoint.path;
+      const res = await callRawEndpoint(selectedEndpoint.method, targetPath, parsedBody);
       setApiResponse(res);
       if (onRefreshDashboard) onRefreshDashboard();
     } catch (err) {
@@ -210,7 +224,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
     e.preventDefault();
     if (!activeIncidentId || !newNote.trim()) return;
     try {
-      await addIncidentNote(activeIncidentId, newNote, "Adnan (Lead Analyst)");
+      await addIncidentNote(activeIncidentId, newNote, "SOC Analyst");
       setNewNote("");
       await selectIncident(activeIncidentId);
     } catch (err) {
@@ -231,13 +245,13 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-bold text-purple-400 uppercase tracking-wider">
-                  Module B Interactive Tester
+                  System Diagnostics
                 </span>
                 <span className="text-xs text-slate-500">•</span>
-                <span className="font-mono text-xs text-emerald-400">100% Parameterized & Verified</span>
+                <span className="font-mono text-xs text-slate-300">Security Verification</span>
               </div>
               <h2 className="text-lg font-bold text-white">
-                Instructor & Tester Verification Center
+                Diagnostics & Security Controls Center
               </h2>
             </div>
           </div>
@@ -261,7 +275,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
             }`}
           >
             <FaPlay size={10} />
-            <span>Automated Test Runner (81 Tests)</span>
+            <span>Automated Test Runner</span>
           </button>
 
           <button
@@ -285,7 +299,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
             }`}
           >
             <FaExchangeAlt size={11} />
-            <span>REST API Explorer (14 Endpoints)</span>
+            <span>REST API Explorer</span>
           </button>
 
           <button
@@ -312,9 +326,9 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
             <div className="space-y-5">
               <div className="rounded-xl border border-slate-700/70 bg-slate-900/40 p-5 flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-sm font-bold text-white">Full Automated Test Suite</h3>
+                  <h3 className="text-sm font-bold text-white">Automated System Test Runner</h3>
                   <p className="mt-1 text-xs text-slate-400 max-w-xl leading-relaxed">
-                    Executes our entire test suite directly on the backend via <code className="font-mono text-purple-300">POST /api/system/tests/run</code>. Verifies SQLite schema constraints, cascading deletes, 14 REST endpoints, SQL injection fuzzing, and the 1,000-event batch performance benchmark.
+                    Executes test verification suites on the backend via <code className="font-mono text-purple-300">POST /api/system/tests/run</code>. Verifies SQLite schema constraints, cascading deletions, REST API endpoints, and query parameterization controls.
                   </p>
                 </div>
                 <button
@@ -323,7 +337,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                   className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-purple-500 shadow-lg shadow-purple-600/20 disabled:opacity-50 active:scale-95"
                 >
                   <FaPlay size={12} className={runningTests ? "animate-spin" : ""} />
-                  {runningTests ? "Executing 81 Tests..." : "Run All 81 Automated Tests"}
+                  {runningTests ? "Executing Tests..." : "Run Automated System Tests"}
                 </button>
               </div>
 
@@ -359,7 +373,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                       <div className="text-[11px] text-slate-400">Overall Status</div>
                       <div className="mt-1 text-sm font-bold font-mono text-emerald-300 uppercase flex items-center gap-1.5">
                         <FaCheckCircle size={14} />
-                        <span>100% PASSED</span>
+                        <span>{testResult.failures === 0 && testResult.errors === 0 ? "PASSED" : "ISSUES REPORTED"}</span>
                       </div>
                     </div>
                   </div>
@@ -376,20 +390,38 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                           className="flex items-center justify-between rounded-lg border border-slate-700/50 bg-slate-900/70 px-4 py-2.5 text-xs"
                         >
                           <div className="flex items-center gap-3">
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-[10px]">
-                              ✓
+                            <span
+                              className={`flex h-5 w-5 items-center justify-center rounded-full font-bold text-[10px] ${
+                                s.status === "PASSED"
+                                  ? "bg-emerald-500/20 text-emerald-400"
+                                  : "bg-danger/20 text-danger"
+                              }`}
+                            >
+                              {s.status === "PASSED" ? "✓" : "✕"}
                             </span>
                             <span className="font-medium text-slate-200">{s.name}</span>
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="font-mono text-slate-400">{s.tests} tests</span>
-                            <span className="rounded bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-bold text-emerald-400 border border-emerald-500/30">
+                            <span
+                              className={`rounded px-2 py-0.5 font-mono text-[10px] font-bold border ${
+                                s.status === "PASSED"
+                                  ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                                  : "bg-danger/15 text-danger border-danger/30"
+                              }`}
+                            >
                               {s.status}
                             </span>
                           </div>
                         </div>
                       ))}
                     </div>
+                    {testResult.output_summary && (
+                      <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-2.5 font-mono text-[11px] text-slate-400">
+                        <span className="text-slate-500 font-semibold mr-2">Execution Output:</span>
+                        <span className="text-emerald-400 font-medium">{testResult.output_summary}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -400,9 +432,9 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
           {activeTab === "sqli" && (
             <div className="space-y-5">
               <div className="rounded-xl border border-slate-700/70 bg-slate-900/40 p-4">
-                <h3 className="text-sm font-bold text-white">Live SQL Injection Immunity Test</h3>
+                <h3 className="text-sm font-bold text-white">Query Parameterization Verification</h3>
                 <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-                  Select or type a hostile payload to test against the live SQLite database. Every query in Module B uses DB-API parameterized markers (<code className="font-mono text-accent">?</code>). This proves string literals cannot alter query semantics or drop tables.
+                  Select or type a hostile payload to test query parameterization against SQLite. All data access queries use DB-API parameterized markers (<code className="font-mono text-accent">?</code>) ensuring user inputs cannot alter query logic or execute unauthorized SQL statements.
                 </p>
               </div>
 
@@ -467,7 +499,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                   className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-purple-600 py-2.5 text-xs font-bold text-white transition hover:bg-purple-500 shadow-md shadow-purple-600/20 disabled:opacity-50"
                 >
                   <FaBug size={12} />
-                  {fuzzing ? "Testing Defense..." : "Execute SQLi Test Against SQLite"}
+                  {fuzzing ? "Testing Defense..." : "Execute Parameterization Test"}
                 </button>
               </div>
 
@@ -477,7 +509,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
                       <FaCheckCircle size={18} />
-                      <span>SQL Injection Safely Neutralized & Blocked</span>
+                      <span>Parameterization Enforced: Safe Literal Processing</span>
                     </div>
                     <span className="font-mono text-xs font-semibold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/30">
                       PRAGMA integrity_check: {fuzzResult.database_integrity}
@@ -517,24 +549,39 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
                 {/* Endpoint List */}
                 <div className="lg:col-span-5 space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block mb-2">
-                    Module B Endpoints (14 Total)
-                  </span>
-                  {API_ENDPOINTS.map((ep, i) => (
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block">
+                      Registered API Endpoints {discoveredRoutes.length > 0 ? `(${discoveredRoutes.length} Total)` : ""}
+                    </span>
+                    {routesLoading && (
+                      <span className="text-[10px] text-purple-400 animate-pulse font-mono">Discovering routes...</span>
+                    )}
+                  </div>
+
+                  {routesError && (
+                    <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-xs text-danger mb-3">
+                      <div className="font-semibold">Route Discovery Error</div>
+                      <div className="text-[11px] mt-0.5">{routesError}</div>
+                      <button
+                        onClick={loadRoutes}
+                        className="mt-2 rounded bg-danger/20 px-2.5 py-1 text-[10px] font-bold text-danger border border-danger/40 hover:bg-danger/30"
+                      >
+                        Retry Discovery
+                      </button>
+                    </div>
+                  )}
+
+                  {discoveredRoutes.map((ep, i) => (
                     <button
-                      key={i}
-                      onClick={() => {
-                        setSelectedEndpoint(ep);
-                        setCustomBody(ep.body ? JSON.stringify(ep.body, null, 2) : "");
-                        setApiResponse(null);
-                      }}
+                      key={`${ep.method}-${ep.path}-${i}`}
+                      onClick={() => handleSelectEndpoint(ep)}
                       className={`w-full text-left rounded-lg border p-2.5 transition text-xs flex items-center justify-between ${
-                        selectedEndpoint.path === ep.path && selectedEndpoint.method === ep.method
+                        selectedEndpoint?.path === ep.path && selectedEndpoint?.method === ep.method
                           ? "border-purple-400 bg-purple-500/15 text-white"
                           : "border-slate-700/60 bg-slate-900/30 text-slate-300 hover:border-slate-600"
                       }`}
                     >
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span
                             className={`font-mono text-[10px] font-bold px-1.5 py-0.5 rounded ${
@@ -542,14 +589,20 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                                 ? "bg-accent/20 text-accent"
                                 : ep.method === "POST"
                                 ? "bg-emerald-500/20 text-emerald-400"
-                                : "bg-warning/20 text-warning"
+                                : ep.method === "PATCH"
+                                ? "bg-warning/20 text-warning"
+                                : "bg-purple-500/20 text-purple-300"
                             }`}
                           >
                             {ep.method}
                           </span>
-                          <span className="font-mono text-slate-200">{ep.path}</span>
+                          <span className="font-mono text-slate-200 truncate">{ep.path}</span>
                         </div>
-                        <p className="mt-1 text-[11px] text-slate-400 truncate">{ep.desc}</p>
+                        <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+                          <span className="font-mono text-purple-300/80">{ep.endpoint}()</span>
+                          <span>•</span>
+                          <span className="truncate">{ep.desc}</span>
+                        </div>
                       </div>
                     </button>
                   ))}
@@ -557,36 +610,67 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
 
                 {/* Request / Response Panel */}
                 <div className="lg:col-span-7 space-y-3">
-                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/60 p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-mono text-xs">
-                        <span className="font-bold text-accent">{selectedEndpoint.method}</span>
-                        <span className="text-white">{selectedEndpoint.path}</span>
+                  {selectedEndpoint ? (
+                    <div className="rounded-xl border border-slate-700/70 bg-slate-900/60 p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 font-mono text-xs flex-1">
+                          <span
+                            className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                              selectedEndpoint.method === "GET"
+                                ? "bg-accent/20 text-accent"
+                                : selectedEndpoint.method === "POST"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : selectedEndpoint.method === "PATCH"
+                                ? "bg-warning/20 text-warning"
+                                : "bg-purple-500/20 text-purple-300"
+                            }`}
+                          >
+                            {selectedEndpoint.method}
+                          </span>
+                          <input
+                            type="text"
+                            value={customPath}
+                            onChange={(e) => setCustomPath(e.target.value)}
+                            className="w-full rounded border border-slate-700 bg-slate-950 px-2.5 py-1 font-mono text-xs text-white focus:border-purple-400 focus:outline-none"
+                            placeholder="/api/..."
+                          />
+                        </div>
+                        <button
+                          disabled={callingApi}
+                          onClick={handleCallApi}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-sky-300 disabled:opacity-50 whitespace-nowrap"
+                        >
+                          <FaPlay size={10} />
+                          {callingApi ? "Calling..." : "Send Request"}
+                        </button>
                       </div>
-                      <button
-                        disabled={callingApi}
-                        onClick={handleCallApi}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-sky-300 disabled:opacity-50"
-                      >
-                        <FaPlay size={10} />
-                        {callingApi ? "Calling..." : "Send Request"}
-                      </button>
-                    </div>
 
-                    {["POST", "PATCH", "PUT"].includes(selectedEndpoint.method) && (
-                      <div>
-                        <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                          Request JSON Payload:
-                        </label>
-                        <textarea
-                          rows={3}
-                          value={customBody}
-                          onChange={(e) => setCustomBody(e.target.value)}
-                          className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 font-mono text-xs text-slate-200 focus:outline-none"
-                        />
+                      <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-2">
+                        <span>Handler:</span>
+                        <code className="font-mono text-purple-300">{selectedEndpoint.endpoint}()</code>
+                        <span>•</span>
+                        <span className="text-slate-300 truncate">{selectedEndpoint.desc}</span>
                       </div>
-                    )}
-                  </div>
+
+                      {["POST", "PATCH", "PUT"].includes(selectedEndpoint.method) && (
+                        <div>
+                          <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                            Request JSON Payload:
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={customBody}
+                            onChange={(e) => setCustomBody(e.target.value)}
+                            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 font-mono text-xs text-slate-200 focus:outline-none"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-slate-700/60 bg-slate-900/40 p-8 text-center text-xs text-slate-400">
+                      {routesLoading ? "Discovering registered endpoints..." : "Select an endpoint to inspect and test."}
+                    </div>
+                  )}
 
                   {/* Response Display */}
                   {apiResponse && (
@@ -714,7 +798,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
                       notesList.map((n, i) => (
                         <div key={n.id || i} className="rounded-lg border border-slate-700/60 bg-slate-900/80 p-3 text-xs space-y-1">
                           <div className="flex items-center justify-between text-slate-400">
-                            <span className="font-semibold text-accent">{n.author || "Adnan"}</span>
+                            <span className="font-semibold text-accent">{n.author || "SOC Analyst"}</span>
                             <span className="font-mono text-[10px] text-slate-500">{n.created_at || "just now"}</span>
                           </div>
                           <p className="text-slate-200 leading-relaxed font-sans">{n.note || n.body}</p>
@@ -751,7 +835,7 @@ export default function TesterCenterModal({ onClose, onRefreshDashboard }) {
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-slate-700/80 px-6 py-3 bg-slate-900/70">
           <div className="text-xs text-slate-400">
-            Backend Architecture: <span className="font-mono text-purple-300">SQLite 3 WAL • 14 REST Endpoints</span>
+            System Diagnostics & Controls Verification
           </div>
           <button
             onClick={onClose}

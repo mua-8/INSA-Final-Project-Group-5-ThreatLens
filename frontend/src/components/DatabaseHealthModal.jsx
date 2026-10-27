@@ -42,11 +42,11 @@ export default function DatabaseHealthModal({ onClose }) {
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-semibold text-accent uppercase tracking-wider">
-                  Module B • Backend API & Database
+                  Database Controls & Telemetry
                 </span>
               </div>
               <h2 className="text-lg font-bold text-white">
-                SQLite Architecture & Telemetry
+                Storage Architecture & Integrity
               </h2>
             </div>
           </div>
@@ -120,7 +120,7 @@ export default function DatabaseHealthModal({ onClose }) {
                 <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
                   <div className="text-xs text-slate-400">Database Size</div>
                   <div className="mt-1 font-mono text-xs font-bold text-white">
-                    {db.size_bytes ? `${(db.size_bytes / 1024).toFixed(1)} KB` : "104 KB"}
+                    {db.size_bytes ? `${(db.size_bytes / 1024).toFixed(1)} KB` : "N/A"}
                   </div>
                 </div>
               </div>
@@ -143,27 +143,27 @@ export default function DatabaseHealthModal({ onClose }) {
                 </div>
               </div>
 
-              {/* Module B Requirements Checklist */}
+              {/* Architecture & Security Controls */}
               <div className="rounded-lg border border-slate-700/60 bg-slate-900/50 p-4 space-y-2">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                  Adnan's Module B Architectural Features
+                  Database Architecture & Security Controls
                 </h4>
                 <ul className="space-y-1.5 text-xs text-slate-300">
                   <li className="flex items-center gap-2">
                     <span className="text-emerald-400">✔</span>
-                    <span><strong>100% Parameterized DB-API Queries:</strong> Immune to SQL Injection (audited with fuzz tests).</span>
+                    <span><strong>Parameterized DB-API Queries:</strong> Protection against SQL injection through strictly parameterized queries.</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <span className="text-emerald-400">✔</span>
-                    <span><strong>Relational Integrity:</strong> Strict Foreign Keys (<code className="font-mono text-accent">PRAGMA foreign_keys = ON</code>).</span>
+                    <span><strong>Relational Integrity:</strong> Foreign key constraint enforcement (<code className="font-mono text-accent">PRAGMA foreign_keys = ON</code>).</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <span className="text-emerald-400">✔</span>
-                    <span><strong>Audit Immutability:</strong> SHA-256 deduplication guard on log files & line hashes.</span>
+                    <span><strong>Audit & Deduplication:</strong> SHA-256 deduplication guard on log files and ingested event line hashes.</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <span className="text-emerald-400">✔</span>
-                    <span><strong>High Performance:</strong> Sliding window index (<code className="font-mono text-accent">idx_events_ip_time</code>) handles 1,000 events in &lt; 1s.</span>
+                    <span><strong>Performance Optimization:</strong> Sliding window index (<code className="font-mono text-accent">idx_events_ip_time</code>) and WAL journal mode for concurrent reads.</span>
                   </li>
                 </ul>
               </div>
@@ -175,7 +175,7 @@ export default function DatabaseHealthModal({ onClose }) {
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-slate-700/80 px-6 py-3 bg-slate-900/60">
           <div className="text-xs text-slate-400">
-            Endpoint: <span className="font-mono text-slate-300">GET /api/health</span>
+            Storage Engine: <span className="font-mono text-slate-300">SQLite 3 (WAL Mode)</span>
           </div>
           <button
             onClick={onClose}

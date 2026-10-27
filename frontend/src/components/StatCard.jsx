@@ -15,11 +15,18 @@ export function StatCardSkeleton() {
   );
 }
 
-export default function StatCard({ label, value, icon: Icon, tone = "accent" }) {
+export default function StatCard({ label, value, icon: Icon, tone = "accent", sublabel }) {
   return (
     <div className="rounded-xl border border-slate-700/60 bg-card p-5 shadow-lg shadow-black/20">
-      <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-lg ring-1 ${TONES[tone]}`}>
-        <Icon size={18} />
+      <div className="flex items-center justify-between mb-4">
+        <div className={`flex h-10 w-10 items-center justify-center rounded-lg ring-1 ${TONES[tone]}`}>
+          <Icon size={18} />
+        </div>
+        {sublabel && (
+          <span className="font-mono text-xs text-slate-300 bg-slate-800/90 px-2.5 py-1 rounded-md border border-slate-700 font-medium">
+            {sublabel}
+          </span>
+        )}
       </div>
       <p className="font-mono text-3xl font-semibold text-white">{Number(value || 0).toLocaleString()}</p>
       <p className="mt-1 text-sm text-slate-400">{label}</p>
