@@ -7,7 +7,7 @@ import {
 } from "../services/api.js";
 import { buildDashboardModel } from "../utils/normalize.js";
 
-const REFRESH_MS = 15000;
+const REFRESH_MS = 5000;
 
 export default function useDashboardData() {
   const [data, setData] = useState(null);
@@ -71,8 +71,8 @@ export default function useDashboardData() {
 
       setError(
         !err.response
-          ? "Cannot reach the ThreatLens API at http://127.0.0.1:5000. Make sure the Flask server is running and CORS is enabled."
-          : `The API returned an error (${err.response.status}). Check the Flask server logs.`
+          ? "Cannot reach the ThreatLens API. Check server connection."
+          : `The API returned an error (${err.response.status}).`
       );
     } finally {
       if (mounted.current) {
@@ -88,14 +88,28 @@ export default function useDashboardData() {
     fetchAll();
     fetchEndpointEvents();
 
+    // 1. Recurring pulse every 5 seconds
     const id = setInterval(() => {
       fetchAll();
       fetchEndpointEvents();
     }, REFRESH_MS);
 
+    // 2. Real-time event listener: triggers instant (0ms) update when attacks or actions occur
+    const handleRealtimeUpdate = () => {
+      if (mounted.current) {
+        fetchAll();
+        fetchEndpointEvents();
+      }
+    };
+
+    window.addEventListener("threatlens:update", handleRealtimeUpdate);
+    window.addEventListener("storage", handleRealtimeUpdate);
+
     return () => {
       mounted.current = false;
       clearInterval(id);
+      window.removeEventListener("threatlens:update", handleRealtimeUpdate);
+      window.removeEventListener("storage", handleRealtimeUpdate);
     };
   }, [fetchAll, fetchEndpointEvents]);
 

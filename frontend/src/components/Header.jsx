@@ -22,17 +22,24 @@ export default function Header({
   defenseActive = true,
   blockedCount = 0,
 }) {
-  const [countdown, setCountdown] = useState(15);
+  const [countdown, setCountdown] = useState(5);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setCountdown((c) => (c <= 1 ? 15 : c - 1));
+      setCountdown((c) => (c <= 1 ? 5 : c - 1));
     }, 1000);
-    return () => clearInterval(timer);
+
+    const handleEvent = () => setCountdown(5);
+    window.addEventListener("threatlens:update", handleEvent);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("threatlens:update", handleEvent);
+    };
   }, []);
 
   const handleManualRefresh = () => {
-    setCountdown(15);
+    setCountdown(5);
     if (onRefresh) onRefresh();
   };
 

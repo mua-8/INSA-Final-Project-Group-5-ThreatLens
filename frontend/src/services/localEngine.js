@@ -58,6 +58,9 @@ function loadState() {
 function saveState(state) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("threatlens:update", { detail: { timestamp: Date.now() } }));
+    }
   } catch (e) {
     console.warn("Failed to persist ThreatLens state to localStorage:", e);
   }
