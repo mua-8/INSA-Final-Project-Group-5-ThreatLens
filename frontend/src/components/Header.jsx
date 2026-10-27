@@ -53,7 +53,7 @@ export default function Header({
 
         <div className="flex items-center gap-3 font-mono text-[10px]">
           <span className="text-slate-400">Telemetry Stream:</span>
-          <span className="text-cyan-400 font-bold">ACTIVE (PORT 5000)</span>
+          <span className="text-cyan-400 font-bold">ONLINE (REAL-TIME STREAM)</span>
           <span className="text-slate-600">|</span>
           <span className="text-slate-400">Next Poll:</span>
           <span className="text-amber-400 font-bold">{countdown}s</span>
