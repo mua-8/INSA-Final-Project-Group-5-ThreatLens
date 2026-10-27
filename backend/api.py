@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional
 import uuid
 import xml.etree.ElementTree as ET
 
-from flask import Flask, jsonify, request, g
+from flask import Flask, jsonify, request, g, make_response
 
 from backend import repository as repo
 from backend.database import (
@@ -144,11 +144,60 @@ def reset_detection_engine(db_path: Optional[str] = None) -> None:
     _detection_engines.pop(target_path, None)
 
 
+def sync_rule_to_engine(engine, rule_dict: dict) -> None:
+    """Apply database detection_rules row settings to engine.config.rules."""
+    rule_id = (rule_dict.get("rule_id") or "").strip().upper()
+    if not rule_id or not hasattr(engine, "config") or not engine.config:
+        return
+    if not hasattr(engine.config, "rules") or rule_id not in engine.config.rules:
+        return
+
+    current = engine.config.rules[rule_id]
+    if "enabled" in rule_dict and rule_dict["enabled"] is not None:
+        current["enabled"] = bool(rule_dict["enabled"])
+    if "severity" in rule_dict and rule_dict["severity"]:
+        current["severity"] = str(rule_dict["severity"]).lower()
+    if "threshold" in rule_dict and rule_dict["threshold"] is not None:
+        current["threshold"] = int(rule_dict["threshold"])
+        if rule_id == "DR-04":
+            current["failure_threshold"] = int(rule_dict["threshold"])
+    if "window_minutes" in rule_dict and rule_dict["window_minutes"] is not None:
+        current["window_minutes"] = int(rule_dict["window_minutes"])
+
+    conditions = rule_dict.get("conditions")
+    if isinstance(conditions, str) and conditions.strip():
+        try:
+            cond_map = json.loads(conditions)
+            if isinstance(cond_map, dict):
+                for k, v in cond_map.items():
+                    current[k] = v
+        except Exception:
+            pass
+
+
+def sync_engine_rules_from_db(engine, conn: sqlite3.Connection) -> None:
+    """Synchronize detection engine rule configurations with database detection_rules table."""
+    try:
+        table_check = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='detection_rules'"
+        ).fetchone()
+        if not table_check or table_check[0] == 0:
+            return
+        rows = conn.execute("SELECT * FROM detection_rules").fetchall()
+        for r in rows:
+            sync_rule_to_engine(engine, dict(r))
+    except Exception:
+        pass
+
+
 def _hydrate_engine_from_db(db_path: str, engine) -> None:
-    """Hydrate past events and alerts from SQLite database into DetectionEngine."""
+    """Hydrate past events, alerts, and active rule configs from SQLite database into DetectionEngine."""
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+
+        # 1. Synchronize rule configurations from detection_rules table
+        sync_engine_rules_from_db(engine, conn)
 
         table_check = conn.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('events', 'alerts', 'alert_evidence')"
@@ -349,12 +398,47 @@ def _sync_endpoint_events_to_siem(conn: sqlite3.Connection, engine) -> None:
 
 
 
+ALLOWED_CORS_ORIGINS = {
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5000",
+    "http://localhost:5000",
+}
+
+
+def _resolve_cors_origin(req) -> Optional[str]:
+    origin = req.headers.get("Origin")
+    if origin and origin.rstrip("/") in ALLOWED_CORS_ORIGINS:
+        return origin
+    return None
+
+
+@app.before_request
+def handle_options_preflight():
+    """Handle CORS preflight OPTIONS requests before endpoint routing."""
+    if request.method == "OPTIONS":
+        res = make_response()
+        allowed_origin = _resolve_cors_origin(request)
+        if allowed_origin:
+            res.headers["Access-Control-Allow-Origin"] = allowed_origin
+        res.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+        res.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Filename, X-Simulation, X-Force"
+        res.headers["Access-Control-Max-Age"] = "86400"
+        res.headers["Vary"] = "Origin"
+        return res, 204
+
+
 @app.after_request
 def add_cors_headers(response):
     """Enable Cross-Origin Resource Sharing (CORS) for SOC frontends."""
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    allowed_origin = _resolve_cors_origin(request)
+    if allowed_origin:
+        response.headers["Access-Control-Allow-Origin"] = allowed_origin
+    else:
+        response.headers.pop("Access-Control-Allow-Origin", None)
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Filename"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Filename, X-Simulation, X-Force"
+    response.headers["Vary"] = "Origin"
     return response
 
 
@@ -408,8 +492,12 @@ def _ok(data, status: int = 200):
     return jsonify({"ok": True, "data": data}), status
 
 
-def _err(message: str, status: int = 400):
-    return jsonify({"ok": False, "error": message}), status
+def _err(message: str, status: int = 400, data: Optional[dict] = None):
+    payload = {"ok": False, "error": message}
+    if data and isinstance(data, dict):
+        payload.update(data)
+        payload["data"] = data
+    return jsonify(payload), status
 
 
 # --------------------------------------------------------------------------
@@ -841,27 +929,38 @@ def get_endpoint_event_detail(event_id: str):
 
 @app.route("/api/ingest", methods=["POST"])
 def ingest():
-    """Upload a raw SSH log file.  Returns new events and triggered alerts.
+    """Upload and parse an SSH/syslog log file or telemetry stream.
 
-    Accepts multipart/form-data with a 'file' field, or raw bytes with the
-    'X-Filename' header for programmatic uploads.
+    Accepts multipart/form-data with a 'file' field, raw text/plain bytes with
+    the 'X-Filename' header, or JSON payloads with a 'raw'/'log' field.
+    Returns parsed events, malformed diagnostic details, and triggered alerts.
     """
     try:
-        # ---- read raw bytes ------------------------------------------------
+        # ---- read raw bytes and filename -----------------------------------
+        filename = "upload.log"
+        raw = b""
+
         if request.files and "file" in request.files:
             f = request.files["file"]
             filename = f.filename or "upload.log"
             raw = f.read()
+        elif request.files and len(request.files) > 0:
+            first_file = next(iter(request.files.values()))
+            filename = first_file.filename or "upload.log"
+            raw = first_file.read()
+        elif request.is_json:
+            body = request.get_json(silent=True) or {}
+            content = body.get("raw") or body.get("log") or body.get("content") or body.get("sample") or ""
+            filename = body.get("filename") or request.headers.get("X-Filename", "upload.log")
+            raw = content.encode("utf-8")
         else:
             raw = request.get_data(parse_form_data=False)
             if not raw and request.form:
                 raw = "\n".join(request.form.keys()).encode("utf-8")
             filename = request.headers.get("X-Filename", "upload.log")
 
-        if not raw:
-            return _err("No file provided. Send multipart 'file' or raw bytes.")
-
-
+        if not raw or not raw.strip():
+            return _err("No log content provided. Upload a non-empty file or paste raw syslog lines.", 400)
 
         year = request.args.get("year", None)
         if year is not None:
@@ -872,16 +971,39 @@ def ingest():
             if not (1970 <= year <= 2100):
                 return _err("'year' must be between 1970 and 2100.")
 
+        is_simulation = (
+            request.args.get("simulate", "").lower() in ("true", "1") or
+            request.headers.get("X-Simulation", "").lower() in ("true", "1")
+        )
+        is_forced = (
+            request.args.get("force", "").lower() in ("true", "1") or
+            request.headers.get("X-Force", "").lower() in ("true", "1")
+        )
+
         # ---- duplicate-upload guard ----------------------------------------
         file_hash = sha256_of(raw)
         conn = get_db()
         existing = repo.get_log_file_by_hash(conn, file_hash)
-        if existing:
+        if existing and not (is_simulation or is_forced):
+            existing_row = _row(existing)
             return _ok({
                 "duplicate": True,
-                "message": "This file has already been uploaded.",
-                "log_file": _row(existing),
-            })
+                "message": f"This exact log file was already ingested as File #{existing_row.get('id', '?')} ({existing_row.get('filename')}). No duplicate records were inserted.",
+                "log_file": existing_row,
+                "total_lines": existing_row.get("line_count", 0),
+                "submitted_lines": existing_row.get("line_count", 0),
+                "events_stored": 0,
+                "accepted_records": 0,
+                "malformed_lines": 0,
+                "rejected_records": 0,
+                "malformed_details": [],
+                "new_alerts": 0,
+                "updated_alerts": 0,
+                "alert_ids": [],
+            }, 200)
+        elif existing and (is_simulation or is_forced):
+            # Salt hash with current UTC timestamp to create a unique simulation record in log_files
+            file_hash = sha256_of(raw + f":sim:{datetime.now(timezone.utc).isoformat()}".encode("utf-8"))
 
         # ---- parse with Module A and adapt to backend Event objects ------
         try:
@@ -892,8 +1014,10 @@ def ingest():
 
         text = raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
-        now = datetime.now(timezone.utc)
+        if not any(l.strip() for l in lines):
+            return _err("Log content contains no non-empty log lines to parse.", 400)
 
+        now = datetime.now(timezone.utc)
         if year is not None:
             try:
                 reference_time = now.replace(year=year)
@@ -905,6 +1029,31 @@ def ingest():
         report = ingest_log_lines(lines, reference_time=reference_time)
         adapted = adapt_ingestion_report(report)
 
+        # Collect malformed line diagnostic details
+        malformed_details = []
+        for m in getattr(adapted, "malformed_events", [])[:10]:
+            malformed_details.append({
+                "line": getattr(m, "line_number", None),
+                "raw": getattr(m, "raw_log", "")[:120],
+                "error": getattr(m, "parsing_error", "Unrecognized OpenSSH format"),
+            })
+
+        # Reject requests where 0 valid events were found
+        if len(adapted.events) == 0:
+            return _err(
+                f"No valid OpenSSH syslog events could be parsed ({adapted.malformed_count} malformed lines).",
+                422,
+                data={
+                    "total_lines": report.statistics.total_lines,
+                    "submitted_lines": report.statistics.total_lines,
+                    "accepted_records": 0,
+                    "events_stored": 0,
+                    "rejected_records": adapted.malformed_count,
+                    "malformed_lines": adapted.malformed_count,
+                    "malformed_details": malformed_details,
+                    "new_alerts": 0,
+                }
+            )
 
         # ---- store log file ------------------------------------------------
         log_file_id = repo.insert_log_file(
@@ -938,6 +1087,19 @@ def ingest():
         for ev, db_id in zip(adapted.events, db_ids):
             if db_id:
                 ev.id = db_id
+
+        # ---- update or auto-enroll endpoints from syslog hosts -------------
+        for ev in adapted.events:
+            host = getattr(ev, "host", None)
+            if host:
+                repo.upsert_endpoint_from_event(
+                    conn,
+                    device_id=host,
+                    timestamp=ev.timestamp.isoformat(),
+                    source="syslog",
+                    source_ip=getattr(ev, "source_ip", None),
+                    hostname=host,
+                )
 
         # ---- run detection engine -----------------------------------------
         try:
@@ -995,14 +1157,25 @@ def ingest():
 
         conn.commit()
 
+        stored_count = sum(1 for i in db_ids if i)
+        new_alerts_count = len(new_alert_ids) if result else 0
+        updated_alerts_count = len(result.updated_alerts) if result else 0
+
         return _ok({
             "log_file_id": log_file_id,
             "filename": filename,
-            "events_stored": sum(1 for i in db_ids if i),
+            "total_lines": report.statistics.total_lines,
+            "submitted_lines": report.statistics.total_lines,
+            "events_stored": stored_count,
+            "accepted_records": stored_count,
             "malformed_lines": adapted.malformed_count,
-            "new_alerts": len(new_alert_ids) if result else None,
-            "updated_alerts": len(result.updated_alerts) if result else None,
+            "rejected_records": adapted.malformed_count,
+            "malformed_details": malformed_details,
+            "new_alerts": new_alerts_count,
+            "updated_alerts": updated_alerts_count,
             "alert_ids": new_alert_ids,
+            "duplicate": False,
+            "message": f"Successfully ingested {stored_count} event(s). Generated {new_alerts_count} new alert(s)."
         }, 201)
 
     except Exception as exc:  # pylint: disable=broad-except
@@ -1039,6 +1212,7 @@ def list_events():
         username=request.args.get("username"),
         outcome=request.args.get("outcome"),
         event_type=request.args.get("event_type"),
+        host=request.args.get("host"),
         since=request.args.get("since"),
         until=request.args.get("until"),
         limit=limit,
@@ -1670,6 +1844,12 @@ def get_endpoint(device_id: str):
         return _err("Endpoint not found.", 404)
     data = _row(endpoint)
     recent_events = repo.list_endpoint_events(conn, device_id=device_id, limit=20)
+    if not recent_events:
+        hostname = data.get("hostname") or device_id
+        syslog_evs = repo.list_events(conn, host=hostname, limit=20)
+        if not syslog_evs and hostname != device_id:
+            syslog_evs = repo.list_events(conn, host=device_id, limit=20)
+        recent_events = syslog_evs
     data["recent_events"] = _rows(recent_events)
     return _ok(data)
 

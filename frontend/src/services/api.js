@@ -60,20 +60,29 @@ export const getSystemHealth = async () => {
   return res.data;
 };
 
-export const ingestLog = async (logData, filename = "upload.log") => {
+export const ingestLog = async (logData, filename = "upload.log", options = {}) => {
+  const params = {};
+  if (options.simulate) params.simulate = "true";
+  if (options.force) params.force = "true";
+
   if (logData instanceof File) {
     const formData = new FormData();
     formData.append("file", logData);
+
     const res = await client.post("/api/ingest", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
+      params,
     });
     return res.data;
   }
+
+  const headers = {
+    "Content-Type": "text/plain",
+    "X-Filename": filename,
+  };
+
   const res = await client.post("/api/ingest", logData, {
-    headers: {
-      "Content-Type": "text/plain",
-      "X-Filename": filename,
-    },
+    params,
+    headers,
   });
   return res.data;
 };

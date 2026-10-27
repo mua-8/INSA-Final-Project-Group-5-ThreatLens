@@ -107,7 +107,7 @@ def get_event(conn: sqlite3.Connection, event_id: int) -> Optional[sqlite3.Row]:
 
 def list_events(conn: sqlite3.Connection, source_ip: Optional[str] = None,
                 username: Optional[str] = None, outcome: Optional[str] = None,
-                event_type: Optional[str] = None,
+                event_type: Optional[str] = None, host: Optional[str] = None,
                 since: Optional[str] = None, until: Optional[str] = None,
                 limit: int = 100, offset: int = 0) -> List[sqlite3.Row]:
     """Filtered event listing used by the search / filter endpoint."""
@@ -124,6 +124,9 @@ def list_events(conn: sqlite3.Connection, source_ip: Optional[str] = None,
     if event_type:
         clauses.append("event_type = ?")
         params.append(event_type)
+    if host:
+        clauses.append("(host = ? OR host LIKE ?)")
+        params.extend([host, f"{host}.%"])
     if since:
         clauses.append("timestamp >= ?")
         params.append(since)
@@ -877,7 +880,13 @@ def list_endpoints(conn: sqlite3.Connection, status: Optional[str] = None,
     params += [limit, offset]
     return conn.execute(
         f"""SELECT e.*,
-                   (SELECT COUNT(*) FROM endpoint_events ee WHERE ee.device_id = e.device_id) AS event_count
+                   ((SELECT COUNT(*) FROM endpoint_events ee
+                     WHERE ee.device_id = e.device_id) +
+                    (SELECT COUNT(*) FROM events ev
+                     JOIN log_files lf ON lf.id = ev.log_file_id
+                     WHERE (ev.host = e.hostname OR ev.host = e.device_id)
+                       AND lf.filename NOT LIKE 'endpoint-agent:%'))
+                   AS event_count
             FROM endpoints e
             {where}
             ORDER BY last_seen DESC
@@ -890,7 +899,13 @@ def get_endpoint(conn: sqlite3.Connection, device_id: str) -> Optional[sqlite3.R
     """Retrieve a single endpoint record by device_id."""
     return conn.execute(
         """SELECT e.*,
-                  (SELECT COUNT(*) FROM endpoint_events ee WHERE ee.device_id = e.device_id) AS event_count
+                  ((SELECT COUNT(*) FROM endpoint_events ee
+                     WHERE ee.device_id = e.device_id) +
+                    (SELECT COUNT(*) FROM events ev
+                     JOIN log_files lf ON lf.id = ev.log_file_id
+                     WHERE (ev.host = e.hostname OR ev.host = e.device_id)
+                       AND lf.filename NOT LIKE 'endpoint-agent:%'))
+                   AS event_count
            FROM endpoints e
            WHERE e.device_id = ?""",
         (device_id.strip(),),
