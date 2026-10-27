@@ -38,6 +38,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Dict, Iterable, List, Optional
 
 from backend.parser import ACCEPTED_LOGIN, INVALID_USER
+from backend.security import is_sqli_string
 
 # --------------------------------------------------------------------------
 # Constants
@@ -52,6 +53,7 @@ RULE_NAMES = {
     "DR-03": "Password spraying",
     "DR-04": "Success after failures",
     "DR-05": "Root login attempt",
+    "DR-06": "SQL injection attack",
 }
 
 DEFAULT_CONFIG = {
@@ -64,6 +66,7 @@ DEFAULT_CONFIG = {
                   "severity": "critical"},
         "DR-05": {"enabled": True, "usernames": ["root"], "severity": "medium",
                   "accepted_severity": "high"},
+        "DR-06": {"enabled": True, "threshold": 1, "window_minutes": 5, "severity": "high"},
     },
 }
 
@@ -78,7 +81,10 @@ _RULE_SCHEMA = {
               "severity": "severity"},
     "DR-05": {"enabled": "bool", "usernames": "names", "severity": "severity",
               "accepted_severity": "severity"},
+    "DR-06": {"enabled": "bool", "threshold": "posint", "window_minutes": "posint",
+              "severity": "severity"},
 }
+
 
 MAX_CONFIG_NUMBER = 100_000
 
@@ -322,10 +328,21 @@ def _describe_dr05(a: Alert):
     return severity, summary, explanation
 
 
+def _describe_dr06(a: Alert):
+    s, n = a.settings, len(a.events)
+    summary = (f"SQL injection attack attempt from {a.source_ip} "
+               f"({n} suspicious payload{'s' if n > 1 else ''})")
+    explanation = (f"SQL injection (DR-06): {n} hostile SQL control sequence(s) detected from "
+                   f"{a.source_ip}. Rule fires at {s['threshold']} or more SQL injection attempts "
+                   f"from one IP within {s['window_minutes']} minutes.")
+    return s["severity"], summary, explanation
+
+
 _DESCRIBERS: Dict[str, Callable] = {
     "DR-01": _describe_dr01, "DR-02": _describe_dr02, "DR-03": _describe_dr03,
-    "DR-04": _describe_dr04, "DR-05": _describe_dr05,
+    "DR-04": _describe_dr04, "DR-05": _describe_dr05, "DR-06": _describe_dr06,
 }
+
 
 
 # --------------------------------------------------------------------------
@@ -437,10 +454,23 @@ def detect_dr05(ip: str, events: list, s: dict, gap: timedelta) -> List[Alert]:
     return alerts
 
 
+def is_sqli_event(event) -> bool:
+    """True if event username or raw line contains SQL injection signatures."""
+    return is_sqli_string(getattr(event, "username", None)) or is_sqli_string(getattr(event, "raw_line", None))
+
+
+def detect_dr06(ip: str, events: list, s: dict, gap: timedelta) -> List[Alert]:
+    sqli_events = [e for e in events if is_sqli_event(e)]
+    window = timedelta(minutes=s["window_minutes"])
+    return [_new_alert("DR-06", ip, ep, s)
+            for ep in _find_episodes(sqli_events, window, s["threshold"])]
+
+
 DETECTORS: Dict[str, Callable] = {
     "DR-01": detect_dr01, "DR-02": detect_dr02, "DR-03": detect_dr03,
-    "DR-04": detect_dr04, "DR-05": detect_dr05,
+    "DR-04": detect_dr04, "DR-05": detect_dr05, "DR-06": detect_dr06,
 }
+
 
 
 # --------------------------------------------------------------------------
@@ -496,17 +526,21 @@ class DetectionEngine:
 
         for event in new_events:
             ref = event_ref(event)
-            bucket = self._history.setdefault(event.source_ip, {})
+            ip = getattr(event, "source_ip", None)
+            if not ip:
+                continue
+            bucket = self._history.setdefault(ip, {})
             if ref in bucket:
                 result.duplicate_events += 1     # same line uploaded again
                 continue
             bucket[ref] = event
-            affected.add(event.source_ip)
+            affected.add(ip)
             result.events_processed += 1
 
         candidates: List[Alert] = []
-        for ip in sorted(affected):
+        for ip in sorted(ip for ip in affected if ip):
             events = sorted(self._history[ip].values(), key=lambda e: e.timestamp)
+
             for rule_id, detector in DETECTORS.items():
                 settings = self.config.rules[rule_id]
                 if settings["enabled"]:

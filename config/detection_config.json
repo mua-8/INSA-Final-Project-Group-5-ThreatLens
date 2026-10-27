@@ -5,6 +5,7 @@
     "DR-02": {"enabled": true, "threshold": 3, "window_minutes": 5, "severity": "medium"},
     "DR-03": {"enabled": true, "threshold": 5, "window_minutes": 10, "severity": "high"},
     "DR-04": {"enabled": true, "failure_threshold": 5, "window_minutes": 10, "severity": "critical"},
-    "DR-05": {"enabled": true, "usernames": ["root"], "severity": "medium", "accepted_severity": "high"}
+    "DR-05": {"enabled": true, "usernames": ["root"], "severity": "medium", "accepted_severity": "high"},
+    "DR-06": {"enabled": true, "threshold": 1, "window_minutes": 5, "severity": "high"}
   }
 }

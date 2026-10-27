@@ -1,5 +1,5 @@
 import React from "react";
-import { FaShieldAlt, FaSyncAlt, FaDatabase, FaBolt, FaVial } from "react-icons/fa";
+import { FaShieldAlt, FaSyncAlt, FaDatabase, FaBolt, FaVial, FaGlobe } from "react-icons/fa";
 
 export default function Header({
   lastUpdated,
@@ -9,6 +9,10 @@ export default function Header({
   onOpenIngest,
   onOpenDbHealth,
   onOpenTesterCenter,
+  onOpenDefenseCenter,
+  onSwitchToVictim,
+  defenseActive = true,
+  blockedCount = 0,
 }) {
   return (
     <header className="sticky top-0 z-20 border-b border-slate-700/60 bg-primary/95 backdrop-blur-md">
@@ -25,26 +29,52 @@ export default function Header({
                 ThreatLens
               </h1>
               <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-bold text-accent uppercase tracking-wider">
-                SOC Core
+                Admin SOC Portal
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              SSH Attack Monitoring • Module B Backend (SQLite WAL)
+              Active Defense Operations Center • Real-Time Attack Interception
             </p>
           </div>
         </div>
 
         {/* Action Controls & Telemetry */}
-        <div className="flex flex-wrap items-center gap-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2.5 text-sm">
           
+          {/* Target Victim Website Switcher Button */}
+          <button
+            onClick={onSwitchToVictim}
+            title="Open Target Public Website (Apex Financial Portal) to launch real attacks and verify automated prevention"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 px-3 py-1.5 text-xs font-bold text-white shadow-lg shadow-cyan-600/25 transition active:scale-95 border border-cyan-400/30"
+          >
+            <FaGlobe size={12} className="text-cyan-200" />
+            <span>Target Web Portal</span>
+          </button>
+
+          {/* Active Defense & Prevention Center Button */}
+          <button
+            onClick={onOpenDefenseCenter}
+            title="Open Active Defense & Auto-Prevention Center (Quarantine, Attack Sim & Admin Guidance)"
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-emerald-600/20 transition active:scale-95 border border-emerald-400/40"
+          >
+            <FaShieldAlt size={12} className="text-emerald-200" />
+            <span>Auto-Defense</span>
+            {blockedCount > 0 && (
+              <span className="rounded-full bg-red-500 px-1.5 py-0.2 text-[10px] font-black text-white ml-0.5">
+                {blockedCount}
+              </span>
+            )}
+          </button>
+
           {/* Module B Verification & Tester Center Button */}
           <button
             onClick={onOpenTesterCenter}
             title="Open Interactive Test Suite, SQLi Fuzzer, and API Explorer"
-            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 active:scale-95"
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-lg shadow-purple-600/25 transition hover:from-purple-500 hover:to-indigo-500 active:scale-95"
           >
             <FaVial size={12} className="text-purple-200" />
-            <span>Tester Center (81 Tests & SQLi)</span>
+            <span className="hidden sm:inline">Tester Center</span>
+            <span className="sm:hidden">Tests</span>
           </button>
 
           {/* Ingest / Simulate Attack Button */}
@@ -53,18 +83,23 @@ export default function Header({
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-sky-300 shadow-md shadow-accent/20 active:scale-95"
           >
             <FaBolt size={12} />
-            <span>Ingest / Attack Sim</span>
+            <span>Ingest Logs</span>
           </button>
 
-          {/* Database Health Badge / Modal Trigger */}
+
+          {/* Database & Cloud Health Badge / Modal Trigger */}
           <button
             onClick={onOpenDbHealth}
-            title="Inspect Module B SQLite Database Integrity & WAL Mode"
+            title="Inspect SQLite Integrity & Firebase Cloud (cybergroup6)"
             className="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-200 transition hover:border-accent hover:text-white"
           >
             <FaDatabase size={12} className="text-emerald-400" />
             <span className="hidden sm:inline">DB:</span>
             <span className="font-mono text-emerald-400 font-semibold">WAL Active</span>
+            <span className="h-3 w-px bg-slate-600 mx-0.5" />
+            <span className="font-mono text-amber-400 font-semibold flex items-center gap-1">
+              <span>Firebase</span>
+            </span>
           </button>
 
           {/* Connection status indicator */}

@@ -27,8 +27,17 @@ The engine does not touch a database. Module B stores what it returns.
 | DR-03 | Password spraying | failed logins against 5 or more distinct users from one IP within 10 minutes | High | the failed logins |
 | DR-04 | Success after failures | an accepted login within 10 minutes of 5 or more failures from the same IP | Critical | the failures plus the accepted login |
 | DR-05 | Root login attempt | any failed or accepted login as `root` | Medium, High if accepted | the root attempts |
+| DR-06 | SQL injection attack | hostile SQL injection payloads (UNION, OR 1=1, DROP, quotes) | High | the SQLi events |
 
 The window is inclusive: events exactly 5 minutes apart count as inside a 5-minute window.
+
+## Automated Prevention & Active Defense
+When high-severity attacks occur (such as DR-01 SSH brute force, DR-04 compromise, DR-05 accepted root, or DR-06 SQL injection):
+1. **Automated IP Quarantine**: Attacker IP is inserted into `blocked_ips` and all subsequent requests are blocked with `HTTP 403 Forbidden`.
+2. **SQL Injection Neutralization**: All database interaction strictly uses DB-API parameterized queries (`?`), guaranteeing zero hostile SQL interpretation.
+3. **Defense Audit Trail**: Mitigations are recorded in `defense_actions` table for continuous telemetry.
+4. **Admin Remediation Guidance**: Actionable remediation steps with copyable firewall (`iptables`/`ufw`), SSH (`/etc/ssh/sshd_config`), and database hardening instructions.
+
 
 ### What counts as a failed login
 

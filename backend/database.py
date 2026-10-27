@@ -129,6 +129,35 @@ CREATE TABLE IF NOT EXISTS incident_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_incident_notes_incident ON incident_notes(incident_id);
+CREATE TABLE IF NOT EXISTS blocked_ips (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip_address  TEXT    NOT NULL UNIQUE,
+    reason      TEXT    NOT NULL,
+    rule_id     TEXT,
+    severity    TEXT    NOT NULL DEFAULT 'high' CHECK(severity IN ('low','medium','high','critical')),
+    blocked_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    blocked_by  TEXT    NOT NULL DEFAULT 'auto_defense',
+    status      TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active','unblocked'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip ON blocked_ips(ip_address);
+CREATE INDEX IF NOT EXISTS idx_blocked_ips_status ON blocked_ips(status);
+
+CREATE TABLE IF NOT EXISTS defense_actions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type TEXT    NOT NULL,
+    target_ip   TEXT    NOT NULL,
+    rule_id     TEXT,
+    details     TEXT    NOT NULL,
+    timestamp   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_defense_actions_time ON defense_actions(timestamp);
+
+CREATE TABLE IF NOT EXISTS defense_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL
+);
 """
 
 
@@ -171,9 +200,12 @@ def check_database_integrity(conn: sqlite3.Connection) -> Dict[str, Any]:
 def get_database_metrics(conn: sqlite3.Connection) -> Dict[str, Any]:
     """Retrieve operational telemetry and storage statistics for SOC reporting."""
     table_counts = {}
-    for tbl in ["log_files", "events", "alerts", "alert_evidence", "incidents", "incident_notes"]:
-        row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
-        table_counts[tbl] = row["n"] if row else 0
+    for tbl in ["log_files", "events", "alerts", "alert_evidence", "incidents", "incident_notes", "blocked_ips", "defense_actions"]:
+        try:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()
+            table_counts[tbl] = row["n"] if row else 0
+        except sqlite3.OperationalError:
+            table_counts[tbl] = 0
 
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]

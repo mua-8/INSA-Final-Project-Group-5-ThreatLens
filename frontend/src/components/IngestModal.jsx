@@ -4,6 +4,16 @@ import { ingestLog } from "../services/api.js";
 
 const PRESET_ATTACKS = [
   {
+    name: "SQL Injection Attack (SQLi)",
+    rule: "DR-06",
+    filename: "attack_sql_injection.log",
+    description: "Hostile SQL injection control syntax (' OR 1=1, UNION SELECT, DROP TABLE) injected into authentication fields from 198.51.100.88.",
+    sample: `Oct 24 14:00:00 web01 sshd[9501]: Failed password for invalid user ' OR '1'='1 from 198.51.100.88 port 42100 ssh2
+Oct 24 14:00:15 web01 sshd[9502]: Failed password for invalid user admin'-- from 198.51.100.88 port 42101 ssh2
+Oct 24 14:00:30 web01 sshd[9503]: Failed password for invalid user ' UNION SELECT null, username, password FROM users-- from 198.51.100.88 port 42102 ssh2
+Oct 24 14:00:45 web01 sshd[9504]: Failed password for invalid user 1; DROP TABLE users;-- from 198.51.100.88 port 42103 ssh2`,
+  },
+  {
     name: "Brute Force SSH (10 attempts)",
     rule: "DR-01",
     filename: "attack_brute_force_10.log",
@@ -21,7 +31,7 @@ Oct 25 10:00:20 server sshd[1243]: Failed password for invalid user support from
   },
   {
     name: "Direct Root Login Attempt",
-    rule: "DR-03",
+    rule: "DR-05",
     filename: "attack_root_login.log",
     description: "High severity policy violation: Direct root login accepted from remote IP 203.0.113.77.",
     sample: `Oct 24 14:00:00 web01 sshd[9000]: Failed password for root from 203.0.113.77 port 45000 ssh2
@@ -30,7 +40,7 @@ Oct 24 14:01:10 web01 sshd[9002]: Accepted password for root from 203.0.113.77 p
   },
   {
     name: "Password Spraying Campaign",
-    rule: "DR-02",
+    rule: "DR-03",
     filename: "attack_password_spraying.log",
     description: "Attacker attempts 1 common password across multiple corporate accounts.",
     sample: `Oct 24 14:00:00 web01 sshd[7000]: Failed password for alice from 198.51.100.42 port 43000 ssh2

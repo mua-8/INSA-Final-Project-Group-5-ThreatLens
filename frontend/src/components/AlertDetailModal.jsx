@@ -1,8 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { FaTimes, FaShieldAlt, FaClock, FaNetworkWired, FaCheckCircle, FaExclamationCircle, FaSearch, FaHistory } from "react-icons/fa";
+import {
+  FaTimes,
+  FaShieldAlt,
+  FaClock,
+  FaNetworkWired,
+  FaCheckCircle,
+  FaExclamationCircle,
+  FaSearch,
+  FaHistory,
+  FaBan,
+  FaTerminal,
+  FaCopy
+} from "react-icons/fa";
 import { SeverityBadge, StatusBadge } from "./Badges.jsx";
 import { formatTimestamp } from "../utils/normalize.js";
-import { getAlertDetails, updateAlertStatus } from "../services/api.js";
+import { getAlertDetails, updateAlertStatus, blockIp, unblockIp } from "../services/api.js";
 
 export default function AlertDetailModal({ alert, onClose, onRefresh }) {
   const [details, setDetails] = useState(null);
@@ -10,6 +22,8 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
   const [error, setError] = useState(null);
   const [updating, setUpdating] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
 
   useEffect(() => {
     if (!alert || !alert.id) return;
@@ -22,6 +36,7 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
         if (!mounted) return;
         const alertData = res.data || res;
         setDetails(alertData);
+        setIsBlocked(Boolean(alertData.is_blocked));
       })
       .catch((err) => {
         if (!mounted) return;
@@ -52,10 +67,41 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
     }
   };
 
+  const handleToggleBlock = async () => {
+    const ip = details?.source_ip || alert.sourceIp;
+    if (!ip || ip === "-") return;
+    setUpdating(true);
+    setFeedback("");
+    try {
+      if (isBlocked) {
+        await unblockIp(ip);
+        setIsBlocked(false);
+        setFeedback(`Quarantine lifted for ${ip}.`);
+      } else {
+        await blockIp(ip, `Quarantined from Alert #${alert.id}: ${details?.rule_name || alert.type}`);
+        setIsBlocked(true);
+        setFeedback(`Attacker IP ${ip} successfully quarantined in active blocklist.`);
+      }
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setFeedback(`Defense action error: ${err.message}`);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const handleCopy = (text, id) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
   if (!alert) return null;
 
   const currentStatus = details?.status || alert.status || "new";
   const evidenceList = details?.evidence || [];
+  const recommendations = details?.recommendations || alert.recommendations;
+  const targetIp = details?.source_ip || alert.sourceIp || "-";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-fadeIn">
@@ -109,7 +155,7 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
             <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
               <div className="text-xs text-slate-400">Attacker IP</div>
               <div className="mt-1 font-mono text-xs font-semibold text-white">
-                {details?.source_ip || alert.sourceIp || "-"}
+                {targetIp}
               </div>
             </div>
             <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
@@ -117,6 +163,54 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               <div className="mt-1 font-mono text-xs font-semibold text-accent">
                 {loading ? "..." : `${evidenceList.length} Events`}
               </div>
+            </div>
+          </div>
+
+          {/* Automated Prevention Status & Real-time Action Banner */}
+          <div className={`rounded-xl border p-4 ${
+            isBlocked
+              ? "border-emerald-500/50 bg-emerald-950/20"
+              : "border-slate-700 bg-slate-900/40"
+          }`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+                  isBlocked ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-700 text-slate-400"
+                }`}>
+                  <FaBan size={16} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-white">
+                      Automated Threat Prevention:
+                    </span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                      isBlocked
+                        ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                        : "bg-slate-700 text-slate-400"
+                    }`}>
+                      {isBlocked ? "Attacker IP Quarantined" : "Not Quarantined"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    {isBlocked
+                      ? `ThreatLens Auto-Defense has active quarantine rule for ${targetIp}. Inbound requests are dropped (403 Forbidden).`
+                      : `IP ${targetIp} is currently active. Click below to manually enforce quarantine.`}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                disabled={updating || targetIp === "-"}
+                onClick={handleToggleBlock}
+                className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition disabled:opacity-40 ${
+                  isBlocked
+                    ? "bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600"
+                    : "bg-danger hover:bg-red-600 text-white shadow-lg shadow-danger/25"
+                }`}
+              >
+                {isBlocked ? "Remove IP Quarantine" : "Quarantine IP Now"}
+              </button>
             </div>
           </div>
 
@@ -148,6 +242,75 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               {details?.explanation || alert.explanation || details?.summary || alert.summary || "No automated explanation available for this alert."}
             </p>
           </div>
+
+          {/* Admin Hardening & Remediation Plan */}
+          {recommendations && (
+            <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 space-y-3">
+              <div className="flex items-center gap-2 border-b border-slate-700/60 pb-2">
+                <FaTerminal className="text-amber-400" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                  Administrator Remediation & System Hardening Plan
+                </h3>
+              </div>
+
+              {/* Immediate Containment Actions */}
+              {recommendations.immediate_actions && (
+                <div className="space-y-1.5 text-xs text-slate-200">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Immediate Containment Steps:
+                  </span>
+                  {recommendations.immediate_actions.map((act, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="text-emerald-400 font-bold">•</span>
+                      <span>{act}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Firewall Drop Command */}
+              {recommendations.auto_prevention_method?.iptables_rule && (
+                <div className="rounded bg-slate-950 p-2.5 font-mono text-xs text-slate-200 border border-slate-800 flex items-center justify-between">
+                  <span>{recommendations.auto_prevention_method.iptables_rule}</span>
+                  <button
+                    onClick={() => handleCopy(recommendations.auto_prevention_method.iptables_rule, "iptables")}
+                    className="text-slate-400 hover:text-accent ml-2 text-xs"
+                    title="Copy command"
+                  >
+                    {copiedId === "iptables" ? "Copied!" : <FaCopy />}
+                  </button>
+                </div>
+              )}
+
+              {/* System Hardening Recommendations */}
+              {recommendations.system_hardening && recommendations.system_hardening.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                    System Hardening Configurations:
+                  </span>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {recommendations.system_hardening.map((hard, idx) => (
+                      <div key={idx} className="rounded-lg bg-slate-800/80 border border-slate-700 p-2.5 text-xs space-y-1">
+                        <div className="font-semibold text-white">{hard.title}</div>
+                        <div className="text-slate-400 text-[11px]">{hard.detail}</div>
+                        {hard.command && (
+                          <div className="rounded bg-slate-950 p-1.5 font-mono text-[10px] text-accent flex items-center justify-between border border-slate-800">
+                            <span className="truncate">{hard.command}</span>
+                            <button
+                              onClick={() => handleCopy(hard.command, `hard-${idx}`)}
+                              className="text-slate-400 hover:text-white ml-2 flex-shrink-0"
+                            >
+                              {copiedId === `hard-${idx}` ? "Copied!" : <FaCopy />}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Triage Action Bar */}
           <div className="rounded-lg border border-slate-700/70 bg-slate-800/60 p-4">
@@ -192,6 +355,7 @@ export default function AlertDetailModal({ alert, onClose, onRefresh }) {
               </div>
             )}
           </div>
+
 
           {/* Linked Evidence Section */}
           <div className="space-y-3">

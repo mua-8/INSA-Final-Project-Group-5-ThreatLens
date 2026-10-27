@@ -29,17 +29,18 @@ SYSLOG_HEADER_RE = re.compile(
 
 # OpenSSH message patterns
 FAILED_RE = re.compile(
-    r"^Failed\s+(?P<method>\S+)\s+for\s+(?:invalid user\s+)?(?P<user>\S+)\s+from\s+(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
+    r"^Failed\s+(?P<method>\S+)\s+for\s+(?:invalid user\s+)?(?P<user>.+?)\s+from\s+(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
 )
 INVALID_RE = re.compile(
-    r"^Invalid user\s+(?P<user>\S+)\s+from\s+(?P<ip>\S+)(?:\s+port\s+(?P<port>\d+))?"
+    r"^Invalid user\s+(?P<user>.+?)\s+from\s+(?P<ip>\S+)(?:\s+port\s+(?P<port>\d+))?"
 )
 ACCEPTED_RE = re.compile(
-    r"^Accepted\s+(?P<method>\S+)\s+for\s+(?P<user>\S+)\s+from\s+(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
+    r"^Accepted\s+(?P<method>\S+)\s+for\s+(?P<user>.+?)\s+from\s+(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
 )
 DISCONNECT_RE = re.compile(
-    r"^Disconnected from\s+(?:invalid user\s+)?(?P<user>\S+)?\s*(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
+    r"^Disconnected from\s+(?:invalid user\s+)?(?P<user>.+?)?\s*(?P<ip>\S+)\s+port\s+(?P<port>\d+)"
 )
+
 
 MONTH_MAP = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,

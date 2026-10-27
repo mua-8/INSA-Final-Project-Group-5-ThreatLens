@@ -55,22 +55,23 @@ SERVICE_PREFIX_RE = re.compile(
 
 # OpenSSH Payload Grammar Patterns
 FAILED_RE = re.compile(
-    r"^Failed (?P<auth_method>[\w-]+) for (?P<invalid>invalid user )?(?P<username>\S+) from (?P<src_ip>\S+) port (?P<src_port>\d+)"
+    r"^Failed (?P<auth_method>[\w-]+) for (?P<invalid>invalid user )?(?P<username>.+?) from (?P<src_ip>\S+) port (?P<src_port>\d+)"
 )
 
 ACCEPTED_RE = re.compile(
-    r"^Accepted (?P<auth_method>[\w-]+) for (?P<username>\S+) from (?P<src_ip>\S+) port (?P<src_port>\d+)"
+    r"^Accepted (?P<auth_method>[\w-]+) for (?P<username>.+?) from (?P<src_ip>\S+) port (?P<src_port>\d+)"
 )
 
 INVALID_USER_RE = re.compile(
-    r"^Invalid user (?P<username>\S+) from (?P<src_ip>\S+)(?: port (?P<src_port>\d+))?"
+    r"^Invalid user (?P<username>.+?) from (?P<src_ip>\S+)(?: port (?P<src_port>\d+))?"
 )
 
 DISCONNECT_RE = re.compile(
     r"^(?:Disconnected from|Connection closed by|Connection reset by|Received disconnect from)"
-    r"(?: (?P<user_type>authenticating user|invalid user|user) (?P<username>\S+))?"
+    r"(?: (?P<user_type>authenticating user|invalid user|user) (?P<username>.+?))?"
     r" (?P<src_ip>\S+)(?: port (?P<src_port>\d+))?"
 )
+
 
 
 def infer_syslog_timestamp(

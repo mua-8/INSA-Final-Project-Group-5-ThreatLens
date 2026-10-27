@@ -87,26 +87,27 @@ def adapt_muaz_event(muaz_event: Any) -> Event:
 
 
 def parse_and_adapt(text: str, year: int) -> ParseResult:
-    """Unified parser entry point: uses Module A's parser if installed, with seamless fallback."""
+    """Unified parser entry point using app.services.ingestion as the primary parser."""
     try:
-        from app.parsers.openssh import parse_openssh_line
+        from app.services.ingestion import ingest_log_lines
+        ref_time = datetime(year, 1, 1, tzinfo=timezone.utc)
+        lines = [line for line in text.splitlines() if line.strip()]
+        report = ingest_log_lines(lines, reference_time=ref_time)
+
         events = []
         malformed = 0
-        ref_time = datetime(year, 1, 1, tzinfo=timezone.utc)
-        for idx, line in enumerate(text.splitlines(), start=1):
-            if not line.strip():
-                continue
-            parsed = parse_openssh_line(line, reference_time=ref_time, line_number=idx)
-            if getattr(parsed, "is_malformed", False) or getattr(parsed, "event_type", None) == "unknown":
-                # Check if it was parseable by fallback
-                fb = fallback_parse_text(line, year)
+        for ev in report.events:
+            if getattr(ev, "is_malformed", False) or getattr(ev, "event_type", None) == "UNKNOWN":
+                # Check fallback parser in case of dialect edge cases
+                fb = fallback_parse_text(ev.raw_log, year)
                 if fb.events:
                     events.extend(fb.events)
                 else:
                     malformed += 1
             else:
-                events.append(adapt_muaz_event(parsed))
+                events.append(adapt_muaz_event(ev))
+
         return ParseResult(events=events, malformed_count=malformed)
-    except (ImportError, Exception):
-        # Module A parser not imported in current environment, use fallback parser
+    except Exception:
+        # Fallback for standalone/CLI testing if app.services is unavailable
         return fallback_parse_text(text, year)

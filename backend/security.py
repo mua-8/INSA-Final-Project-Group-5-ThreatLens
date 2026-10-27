@@ -27,13 +27,24 @@ VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_ALERT_STATUSES = {"new", "investigating", "resolved", "false_positive"}
 VALID_INCIDENT_STATUSES = {"open", "in_progress", "closed"}
 
-# SQL Injection pattern detector for security auditing tests
+# SQL Injection pattern detector for security auditing and detection
 SQL_INJECTION_PATTERNS = [
     re.compile(r"(\bUNION\b|\bSELECT\b|\bINSERT\b|\bDELETE\b|\bDROP\b|\bUPDATE\b)\s+", re.IGNORECASE),
     re.compile(r"(--|;|\/\*|\*\/|@@|char\s*\(|nchar\s*\()", re.IGNORECASE),
-    re.compile(r"'\s*(OR|AND)\s*'\d+'\s*=\s*'\d+", re.IGNORECASE),
-    re.compile(r"'\s*(OR|AND)\s*\d+\s*=\s*\d+", re.IGNORECASE),
+    re.compile(r"'\s*(OR|AND)\s*['\"]?\d+['\"]?\s*=\s*['\"]?\d+", re.IGNORECASE),
+    re.compile(r"(\bOR\b|\bAND\b)\s+1\s*=\s*1", re.IGNORECASE),
+    re.compile(r"(\bSLEEP\b|\bBENCHMARK\b|\bWAITFOR\b\s+DELAY)", re.IGNORECASE),
+    re.compile(r"(\bEXEC\b|\bXP_CMDSHELL\b)", re.IGNORECASE),
+    re.compile(r"['\"](?:\s*;|--|#)", re.IGNORECASE),
 ]
+
+
+def is_sqli_string(text: Optional[str]) -> bool:
+    """Check if the provided text matches known SQL injection signatures."""
+    if not text:
+        return False
+    clean = text.strip()
+    return any(p.search(clean) for p in SQL_INJECTION_PATTERNS)
 
 
 class ValidationError(ValueError):
@@ -42,6 +53,7 @@ class ValidationError(ValueError):
         super().__init__(f"Field '{field}': {message}")
         self.field = field
         self.message = message
+
 
 
 def validate_ip(ip_str: Optional[str]) -> Optional[str]:

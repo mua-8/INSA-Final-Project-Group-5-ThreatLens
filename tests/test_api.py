@@ -264,6 +264,72 @@ class TestThreatLensAPI(unittest.TestCase):
             data2 = resp2.get_json()
             self.assertTrue(data2["data"]["duplicate"])
 
+    # ----------------------------------------------------------------------
+    # Active Defense & Auto-Prevention Tests
+    # ----------------------------------------------------------------------
+
+    def test_defense_status_and_toggle(self):
+        resp = self.client.get("/api/defense/status")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["ok"])
+        self.assertIn("summary", data["data"])
+
+        # Toggle defense off
+        resp_off = self.client.post("/api/defense/toggle", json={"enabled": False})
+        self.assertEqual(resp_off.status_code, 200)
+        self.assertFalse(resp_off.get_json()["data"]["auto_defense_enabled"])
+
+        # Toggle defense back on
+        resp_on = self.client.post("/api/defense/toggle", json={"enabled": True})
+        self.assertEqual(resp_on.status_code, 200)
+        self.assertTrue(resp_on.get_json()["data"]["auto_defense_enabled"])
+
+    def test_manual_block_and_unblock(self):
+        test_ip = "198.51.100.222"
+        # Block IP
+        resp_block = self.client.post(
+            "/api/defense/block",
+            json={"ip": test_ip, "reason": "Hostile port scan detected"}
+        )
+        self.assertEqual(resp_block.status_code, 200)
+        self.assertTrue(repo.is_ip_blocked(self.conn, test_ip))
+
+        # Unblock IP
+        resp_unblock = self.client.post("/api/defense/unblock", json={"ip": test_ip})
+        self.assertEqual(resp_unblock.status_code, 200)
+        self.assertFalse(repo.is_ip_blocked(self.conn, test_ip))
+
+    def test_simulate_attack_and_auto_prevention(self):
+        # Simulate SQL Injection attack live
+        resp = self.client.post(
+            "/api/defense/simulate-attack",
+            json={"attack_type": "sqli", "ip": "198.51.100.88"}
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.get_json()["data"]
+        self.assertEqual(data["attack_type"], "sqli")
+        self.assertTrue(data["auto_prevented"])
+        self.assertGreaterEqual(len(data["alerts"]), 1)
+        self.assertIn("recommendations", data)
+        self.assertEqual(data["recommendations"]["rule_id"], "DR-06")
+
+        # Verify that attacker IP was automatically quarantined
+        self.assertTrue(repo.is_ip_blocked(self.conn, "198.51.100.88"))
+
+    def test_simulate_brute_force_attack(self):
+        # Simulate Multi-Password Brute Force attack live
+        resp = self.client.post(
+            "/api/defense/simulate-attack",
+            json={"attack_type": "brute_force", "ip": "192.168.1.105"}
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.get_json()["data"]
+        self.assertEqual(data["attack_type"], "brute_force")
+        self.assertTrue(data["auto_prevented"])
+        self.assertTrue(repo.is_ip_blocked(self.conn, "192.168.1.105"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

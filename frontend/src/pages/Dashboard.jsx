@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { FaListUl, FaBell, FaExclamationTriangle, FaNetworkWired, FaPlug, FaRedo } from "react-icons/fa";
+import { FaListUl, FaBell, FaExclamationTriangle, FaNetworkWired, FaPlug, FaRedo, FaShieldAlt, FaBan, FaBolt, FaGlobe } from "react-icons/fa";
 import Header from "../components/Header.jsx";
 import StatCard, { StatCardSkeleton } from "../components/StatCard.jsx";
 import Charts, { ChartSkeleton } from "../components/Charts.jsx";
@@ -10,6 +10,7 @@ import EventDetailModal from "../components/EventDetailModal.jsx";
 import IngestModal from "../components/IngestModal.jsx";
 import DatabaseHealthModal from "../components/DatabaseHealthModal.jsx";
 import TesterCenterModal from "../components/TesterCenterModal.jsx";
+import DefenseCenterModal from "../components/DefenseCenterModal.jsx";
 import useDashboardData from "../hooks/useDashboardData.js";
 
 function LoadingState() {
@@ -49,7 +50,7 @@ function ErrorState({ message, onRetry, retrying }) {
   );
 }
 
-export default function Dashboard() {
+export default function Dashboard({ onSwitchToVictim }) {
   const { data, loading, refreshing, error, lastUpdated, retry } = useDashboardData();
   
   // Interactive modal states
@@ -58,6 +59,13 @@ export default function Dashboard() {
   const [showIngestModal, setShowIngestModal] = useState(false);
   const [showDbHealthModal, setShowDbHealthModal] = useState(false);
   const [showTesterCenter, setShowTesterCenter] = useState(false);
+  const [showDefenseCenter, setShowDefenseCenter] = useState(false);
+
+  const defense = data?.defense || {
+    auto_defense_enabled: true,
+    active_quarantined_ips: 0,
+    total_defense_actions: 0,
+  };
 
   return (
     <div className="min-h-screen bg-primary pb-16">
@@ -69,6 +77,10 @@ export default function Dashboard() {
         onOpenIngest={() => setShowIngestModal(true)}
         onOpenDbHealth={() => setShowDbHealthModal(true)}
         onOpenTesterCenter={() => setShowTesterCenter(true)}
+        onOpenDefenseCenter={() => setShowDefenseCenter(true)}
+        onSwitchToVictim={onSwitchToVictim}
+        defenseActive={defense.auto_defense_enabled}
+        blockedCount={defense.active_quarantined_ips}
       />
 
       <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
@@ -84,6 +96,70 @@ export default function Dashboard() {
                 <button onClick={retry} className="font-semibold underline underline-offset-2">Retry now</button>
               </div>
             )}
+
+            {/* Active Defense & Live Auto-Prevention Status Banner */}
+            <div className="rounded-2xl border border-emerald-500/40 bg-gradient-to-r from-slate-900 via-slate-900/95 to-emerald-950/40 p-4 shadow-xl backdrop-blur-md">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/40 shadow-lg shadow-emerald-500/10">
+                    <FaShieldAlt size={22} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-bold text-white tracking-wide">
+                        Automated Threat Prevention & Active Defense
+                      </h2>
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                        defense.auto_defense_enabled
+                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                          : "bg-warning/20 text-warning border border-warning/30"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${defense.auto_defense_enabled ? "bg-emerald-400 animate-pulse" : "bg-warning"}`} />
+                        {defense.auto_defense_enabled ? "Auto-Prevention Active" : "Monitoring Only"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      Identifies SSH brute force, SQL injection, spraying, and account breaches in real time. Automatically quarantines attacker IPs and recommends SOC remediation.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="flex items-center gap-2 rounded-lg bg-slate-800/80 px-3 py-1.5 border border-slate-700 text-xs">
+                    <FaBan className="text-danger" size={12} />
+                    <span className="text-slate-400">Quarantined IPs:</span>
+                    <span className="font-mono font-bold text-white">{defense.active_quarantined_ips}</span>
+                  </div>
+
+                  <button
+                    onClick={onSwitchToVictim}
+                    title="Launch the target public website to test attacks directly on it"
+                    className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-md shadow-cyan-600/25 transition active:scale-95"
+                  >
+                    <FaGlobe size={12} />
+                    <span>Launch Target Website</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowDefenseCenter(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-md shadow-emerald-600/25 transition active:scale-95"
+                  >
+                    <FaShieldAlt size={12} />
+                    <span>Defense Center</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowDefenseCenter(true);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 hover:bg-accent/20 px-3 py-1.5 text-xs font-bold text-accent transition active:scale-95"
+                  >
+                    <FaBolt size={12} />
+                    <span>⚡ Attack Sim</span>
+                  </button>
+                </div>
+              </div>
+            </div>
 
             {/* Stat Cards */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -151,6 +227,14 @@ export default function Dashboard() {
           onRefreshDashboard={retry}
         />
       )}
+
+      {showDefenseCenter && (
+        <DefenseCenterModal
+          onClose={() => setShowDefenseCenter(false)}
+          onRefresh={retry}
+        />
+      )}
     </div>
   );
 }
+

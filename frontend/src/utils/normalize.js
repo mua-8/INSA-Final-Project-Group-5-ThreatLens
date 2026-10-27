@@ -35,6 +35,8 @@ export const normalizeAlert = (a = {}) => ({
   explanation: a.explanation || "",
   firstSeen: a.first_seen || "",
   lastSeen: a.last_seen || "",
+  isBlocked: Boolean(a.is_blocked),
+  recommendations: a.recommendations || null,
 });
 
 export const normalizeEvent = (e = {}) => ({
@@ -154,10 +156,16 @@ export const buildDashboardModel = (rawStats, rawEvents, rawAlerts) => {
     uniqueIps: Number(
       pick(stats, ["unique_source_ips", "unique_ips", "unique_sources", "unique_ip_count"], uniqueIps)
     ),
+    defense: stats?.defense || {
+      auto_defense_enabled: true,
+      active_quarantined_ips: 0,
+      total_defense_actions: 0,
+    },
   };
 
   return {
     summary,
+    defense: stats?.defense || summary.defense,
     severity,
     topIps,
     eventsTimeline: bucketize(events),
@@ -166,3 +174,4 @@ export const buildDashboardModel = (rawStats, rawEvents, rawAlerts) => {
     events: events.slice(0, 10),
   };
 };
+

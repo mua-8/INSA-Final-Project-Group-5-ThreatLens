@@ -354,3 +354,114 @@ def list_incident_notes(conn: sqlite3.Connection,
         "SELECT * FROM incident_notes WHERE incident_id=? ORDER BY created_at",
         (incident_id,),
     ).fetchall()
+
+
+# --------------------------------------------------------------------------
+# Active Defense & Auto-Prevention (Quarantine, Actions, Settings)
+# --------------------------------------------------------------------------
+
+def block_ip(conn: sqlite3.Connection, ip_address: str, reason: str,
+             rule_id: Optional[str] = None, severity: str = "high",
+             blocked_by: str = "auto_defense") -> int:
+    """Add or re-activate an IP in the quarantine blocklist."""
+    ip_clean = ip_address.strip()
+    valid_sev = {"low", "medium", "high", "critical"}
+    if severity not in valid_sev:
+        severity = "high"
+    
+    cur = conn.execute(
+        """INSERT INTO blocked_ips (ip_address, reason, rule_id, severity, blocked_by, status, blocked_at)
+           VALUES (?, ?, ?, ?, ?, 'active', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+           ON CONFLICT(ip_address) DO UPDATE SET
+             reason = excluded.reason,
+             rule_id = COALESCE(excluded.rule_id, blocked_ips.rule_id),
+             severity = excluded.severity,
+             blocked_by = excluded.blocked_by,
+             status = 'active',
+             blocked_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')""",
+        (ip_clean, reason.strip(), rule_id, severity, blocked_by),
+    )
+    return cur.lastrowid
+
+
+def unblock_ip(conn: sqlite3.Connection, ip_address: str) -> bool:
+    """Set quarantine status to unblocked for a given IP."""
+    cur = conn.execute(
+        "UPDATE blocked_ips SET status = 'unblocked' WHERE ip_address = ?",
+        (ip_address.strip(),),
+    )
+    return cur.rowcount > 0
+
+
+def is_ip_blocked(conn: sqlite3.Connection, ip_address: Optional[str]) -> bool:
+    """Check whether an IP is currently actively blocked."""
+    if not ip_address:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM blocked_ips WHERE ip_address = ? AND status = 'active'",
+        (ip_address.strip(),),
+    ).fetchone()
+    return row is not None
+
+
+def list_blocked_ips(conn: sqlite3.Connection, status: Optional[str] = None) -> List[sqlite3.Row]:
+    """Return blocked IPs, optionally filtered by status ('active' or 'unblocked')."""
+    if status:
+        return conn.execute(
+            "SELECT * FROM blocked_ips WHERE status = ? ORDER BY blocked_at DESC",
+            (status,),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM blocked_ips ORDER BY blocked_at DESC"
+    ).fetchall()
+
+
+def record_defense_action(conn: sqlite3.Connection, action_type: str,
+                          target_ip: str, rule_id: Optional[str],
+                          details: str) -> int:
+    """Audit log entry for automated or manual defense interventions."""
+    cur = conn.execute(
+        """INSERT INTO defense_actions (action_type, target_ip, rule_id, details)
+           VALUES (?, ?, ?, ?)""",
+        (action_type, target_ip.strip(), rule_id, details.strip()),
+    )
+    return cur.lastrowid
+
+
+def list_defense_actions(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
+    """Return recent defense actions for the admin telemetry feed."""
+    return conn.execute(
+        "SELECT * FROM defense_actions ORDER BY timestamp DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def get_defense_setting(conn: sqlite3.Connection, key: str, default: str = "true") -> str:
+    row = conn.execute("SELECT value FROM defense_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_defense_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """INSERT INTO defense_settings (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+        (key, str(value)),
+    )
+
+
+def get_defense_summary(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Telemetry summary for SOC dashboard defense card."""
+    active_blocks = conn.execute(
+        "SELECT COUNT(*) FROM blocked_ips WHERE status = 'active'"
+    ).fetchone()[0]
+    total_actions = conn.execute(
+        "SELECT COUNT(*) FROM defense_actions"
+    ).fetchone()[0]
+    auto_defense_on = get_defense_setting(conn, "auto_defense_enabled", "true").lower() == "true"
+    
+    return {
+        "auto_defense_enabled": auto_defense_on,
+        "active_quarantined_ips": active_blocks,
+        "total_defense_actions": total_actions,
+    }
+
